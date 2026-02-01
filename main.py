@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ZKH Strategy Settings
+# ONE% Strategy Settings
 PROFIT_MARGIN = 0.01  
 TRADE_AMOUNT = 5.0    
 
@@ -30,7 +30,7 @@ def get_all_sports_markets():
         return []
 
 def scan_and_trade():
-    print("ZKH Multi-Scanner: Checking active sports markets...")
+    print("ONE% Multi-Scanner: Checking active sports markets...")
     markets = get_all_sports_markets()
     print(f"Found {len(markets)} matches. Scanning prices...")
 
@@ -48,7 +48,7 @@ def scan_and_trade():
             total = y_p + n_p
             
             if 0 < total <= (1.0 - PROFIT_MARGIN):
-                print(f"\n--- ZKH OPPORTUNITY DETECTED ---")
+                print(f"\n--- ONE% OPPORTUNITY DETECTED ---")
                 print(f"Match: {market['question']}")
                 print(f"Yes: {y_p} | No: {n_p} | Sum: {total:.3f}")
                 print(f"Target Profit: {((1.0 - total) * 100):.2f}%")
@@ -57,11 +57,11 @@ def scan_and_trade():
             continue
 
 def start_bot():
-    print("ZKH Strategy: Multi-Market Sports Bot Active.")
+    print("ONE% Strategy: Multi-Market Sports Bot Active.")
     while True:
         scan_and_trade()
         print("-" * 30)
-        print("ZKH Scan cycle complete. Waiting 20 seconds...")
+        print("ONE% Scan cycle complete. Waiting 20 seconds...")
         time.sleep(20)
 
 if __name__ == "__main__":
