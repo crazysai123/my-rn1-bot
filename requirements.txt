@@ -1,0 +1,3 @@
+py-polymarket-library
+python-dotenv
+
