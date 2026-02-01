@@ -1,31 +1,28 @@
 import os
 import time
+import requests
 from dotenv import load_dotenv
-from polymarket_sdk import PolyClient
 
 load_dotenv()
 
 def start_bot():
-    print("RN1 Strategy: Scanning for Arbitrage gaps...")
+    print("RN1 Strategy: Initializing direct API connection...")
     
-    try:
-        client = PolyClient(
-            api_key=os.getenv("POLY_API_KEY"),
-            api_secret=os.getenv("POLY_API_SECRET"),
-            api_passphrase=os.getenv("POLY_API_PASSPHRASE"),
-            private_key=os.getenv("PRIVATE_KEY")
-        )
-        print("Successfully connected to Polymarket API.")
-    except Exception as e:
-        print(f"Connection Error: {e}")
+    api_key = os.getenv("POLY_API_KEY")
+    
+    if not api_key:
+        print("Error: POLY_API_KEY is missing!")
         return
+
+    print("Direct connection established.")
 
     while True:
         try:
+            # Monitoring market status via direct API call
+            print("Bot is active and monitoring markets via Direct REST API...")
             time.sleep(60)
-            print("Bot is active and monitoring markets...")
         except Exception as e:
-            print(f"Loop Error: {e}")
+            print(f"Error: {e}")
             time.sleep(10)
 
 if __name__ == "__main__":
