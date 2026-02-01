@@ -1,2 +1,2 @@
-polymarket
+polymarket==1.0.10
 python-dotenv
