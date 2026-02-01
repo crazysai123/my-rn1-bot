@@ -1,2 +1,2 @@
-py-polymarket-sdk
+polymarket
 python-dotenv
