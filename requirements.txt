@@ -1,3 +1,2 @@
-py-polymarket-library
+py-polymarket-sdk
 python-dotenv
-
