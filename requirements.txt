@@ -1,2 +1,2 @@
-git+https://github.com/Polymarket/py-polymarket-sdk.git
 python-dotenv
+requests
