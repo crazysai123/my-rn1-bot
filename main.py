@@ -5,62 +5,62 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Strategy Settings
-PROFIT_MARGIN = 0.001    # 0.1% Profit Target
-TOTAL_BALANCE = 100.0    
-TRADE_AMOUNT = 10.0      
+# RN1 Strategy Settings
+PROFIT_MARGIN = 0.0001   # အမြတ် ၀.၀၁% ရှိတာနဲ့ ဝယ်မယ် (RN1 စတိုင်)
+TOTAL_BALANCE = 100.0    # Virtual Wallet
+TRADE_AMOUNT = 0.5       # $0.5 ပဲသုံးပြီး အကြိမ်ရေ ရာနဲ့ချီ Trade မယ်
 
 GREEN = '\033[92m'
+YELLOW = '\033[93m'
 CYAN = '\033[96m'
 RESET = '\033[0m'
 
-def scan_all_sports():
+# RN1 ရဲ့ နယ်ပယ်စုံ စစ်ဆေးမှု (Sports + Esports + Politics)
+MARKET_TAGS = ["Sports", "NBA", "Soccer", "Gaming", "Crypto", "Politics"]
+
+def rn1_scalping_mode():
     global TOTAL_BALANCE
-    # Sport tags အားလုံးကို စစ်ဆေးရန်
-    sport_tags = ["Sports", "NBA", "Soccer", "Tennis", "MMA", "NFL"]
+    print(f"{CYAN}RN1 Scalper Mode Active. Wallet: ${TOTAL_BALANCE:.2f}{RESET}")
     
-    print(f"{CYAN}Scanning All Sport Markets... Balance: ${TOTAL_BALANCE:.2f}{RESET}")
-    
-    for tag in sport_tags:
+    for tag in MARKET_TAGS:
         try:
-            # Tag တစ်ခုချင်းစီအလိုက် ပွဲအားလုံးကို ဆွဲယူခြင်း
             url = f"https://clob.polymarket.com/markets?tag={tag}&active=true"
             markets = requests.get(url, timeout=10).json()
             markets = markets if isinstance(markets, list) else markets.get('data', [])
             
-            print(f"\nScanning {tag} ({len(markets)} matches)", end="")
-
-            for market in markets:
+            # ပွဲပေါင်းများစွာကို အမြန်နှုန်းဖြင့် စစ်ဆေးခြင်း
+            for market in markets[:20]: # Tag တစ်ခုစီက ထိပ်ဆုံး ၂၀ ပွဲစီ
                 try:
                     tokens = market.get('tokens', [])
                     if len(tokens) < 2: continue
                     
-                    # Live Price ကို စစ်ဆေးခြင်း
-                    y_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}", timeout=5).json().get('price', 0))
-                    n_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}", timeout=5).json().get('price', 0))
+                    # Live Price API
+                    y_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}", timeout=3).json().get('price', 0))
+                    n_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}", timeout=3).json().get('price', 0))
                     
-                    print(".", end="", flush=True)
-
                     if y_p > 0 and n_p > 0:
                         total_cost = y_p + n_p
+                        
+                        # RN1 Strategy Logic: ဈေးကွက်ကွာဟချက် အနည်းငယ်ရှိတာနဲ့ ချက်ချင်းဝယ်
                         if total_cost <= (1.0 - PROFIT_MARGIN):
-                            print(f"\n{GREEN}[!!! OPPORTUNITY FOUND IN {tag.upper()} !!!]")
-                            print(f"Match: {market.get('question')[:50]}")
+                            print(f"\n{GREEN}[RN1 STYLE TRADE]")
+                            print(f"Tag: {tag} | Market: {market.get('question')[:40]}...")
                             
-                            # Trade Execution Logic
+                            # Micro-amount Deduction
                             TOTAL_BALANCE -= TRADE_AMOUNT
-                            print(f"Action: Invested ${TRADE_AMOUNT:.2f} | New Wallet: ${TOTAL_BALANCE:.2f}")
+                            print(f"{YELLOW}Buy: ${TRADE_AMOUNT:.2f} | Wallet: ${TOTAL_BALANCE:.2f}{RESET}")
                             
-                            profit = (1.0 - total_cost) * (TRADE_AMOUNT / total_cost)
+                            # Scalping Profit
+                            shares = TRADE_AMOUNT / total_cost
+                            profit = shares - TRADE_AMOUNT
                             TOTAL_BALANCE += (TRADE_AMOUNT + profit)
-                            print(f"Settled: Total Balance Updated to ${TOTAL_BALANCE:.2f}{RESET}")
+                            print(f"Settled: New Balance ${TOTAL_BALANCE:.2f}")
+                            print("-" * 20)
                 except: continue
-        except:
-            print(f"\nError scanning {tag}, skipping...")
-            continue
+        except: continue
 
 if __name__ == "__main__":
     while True:
-        scan_all_sports()
-        print(f"\n{CYAN}All Sports Scanned. Restarting in 30 seconds...{RESET}")
-        time.sleep(30)
+        rn1_scalping_mode()
+        # RN1 လိုမျိုး မြန်မြန်ဆန်ဆန် ပြန်စစ်ဆေးဖို့ စောင့်ဆိုင်းချိန် လျှော့ချထားသည်
+        time.sleep(5) 
