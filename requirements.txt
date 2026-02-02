@@ -1,4 +1,3 @@
-py-clob-client
-websockets
-python-dotenv
+cloudscraper
 requests
+python-dotenv
