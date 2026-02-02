@@ -13,8 +13,7 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Logic ---
-INITIAL_BALANCE = 1000.0
+# --- Strategy Logic ($1000 Capital) ---
 CURRENT_BALANCE = 1000.0 
 TOTAL_PROFIT = 0.0
 TRADE_SIZE = 20.0       
@@ -33,21 +32,11 @@ HEADERS = {
 def send_tele(msg, show_balance_btn=False):
     if not TELE_TOKEN: return
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELE_CHAT_ID,
-        "text": msg,
-        "parse_mode": "Markdown"
-    }
-    
-    # Balance စစ်ဖို့ Button ထည့်ခြင်း
+    payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     if show_balance_btn:
-        payload["reply_markup"] = {
-            "inline_keyboard": [[{"text": "💰 Check Total Balance", "callback_data": "get_balance"}]]
-        }
-        
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Total Balance", "callback_data": "get_balance"}]]}
     try:
-        with httpx.Client() as client:
-            client.post(url, json=payload)
+        with httpx.Client() as client: client.post(url, json=payload)
     except: pass
 
 def check_market_logic(m, client):
@@ -60,26 +49,22 @@ def check_market_logic(m, client):
         market_id = m.get('conditionId') or m.get('condition_id')
         a_id, b_id = tokens[0], tokens[1]
 
-        # ၁။ Entry Check (ဈေးနှုန်းအတိအကျဖြင့် မှတ်သားခြင်း)
         if market_id not in ACTIVE_TRADES:
             a_res = client.get(f"https://clob.polymarket.com/price?token_id={a_id}&side=BUY").json()
             b_res = client.get(f"https://clob.polymarket.com/price?token_id={b_id}&side=BUY").json()
             a_p, b_p = float(a_res.get('price', 0)), float(b_res.get('price', 0))
             
+            # Entry Logic: A+B ≈ 1.00 (Parity Entry)
             if 0.98 <= (a_p + b_p) <= 1.01:
                 ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
                 entry_msg = (
-                    f"🛡️ *ENTRY EXECUTED*\n"
-                    f"📌 *Event:* {question}\n"
+                    f"🏢 *GIANT SCAN ENTRY (1000)*\n📌 {question}\n"
                     f"----------------------------\n"
-                    f"🔹 *Side A:* `${a_p:.3f}`\n"
-                    f"🔸 *Side B:* `${b_p:.3f}`\n"
-                    f"📊 *Entry Sum:* `${a_p + b_p:.3f}`\n"
-                    f"💵 *Amount:* `${TRADE_SIZE * 2}`"
+                    f"🔹 A: `${a_p:.3f}` | 🔸 B: `${b_p:.3f}`\n"
+                    f"📊 Parity Sum: `${a_p+b_p:.3f}`"
                 )
-                send_tele(entry_msg, show_balance_btn=True)
+                send_tele(entry_msg, True)
 
-        # ၂။ Profit Exit (ဈေးနှုန်းအတိအကျဖြင့် ထွက်ခြင်း)
         elif market_id in ACTIVE_TRADES:
             a_res = client.get(f"https://clob.polymarket.com/price?token_id={a_id}&side=SELL").json()
             b_res = client.get(f"https://clob.polymarket.com/price?token_id={b_id}&side=SELL").json()
@@ -87,58 +72,50 @@ def check_market_logic(m, client):
             total_exit_sum = a_bid + b_bid
 
             if total_exit_sum >= EXIT_THRESHOLD:
-                entry_data = ACTIVE_TRADES[market_id]
                 net_profit = (TRADE_SIZE * total_exit_sum) - (TRADE_SIZE * 2) - GAS_BUFFER
-                
                 with balance_lock:
                     CURRENT_BALANCE += net_profit
                     TOTAL_PROFIT += net_profit
                     exit_msg = (
-                        f"💰 *PROFIT EXIT*\n"
-                        f"📌 *Event:* {question}\n"
+                        f"💰 *PROFIT CAPTURED*\n📌 {question}\n"
                         f"----------------------------\n"
-                        f"📥 *Entry A+B:* `${entry_data['a_entry'] + entry_data['b_entry']:.3f}`\n"
-                        f"📤 *Exit A:* `${a_bid:.3f}` | *B:* `${b_bid:.3f}`\n"
-                        f"📈 *Exit Sum:* `${total_exit_sum:.3f}`\n"
-                        f"💵 *Net Profit:* `+${net_profit:.4f}`"
+                        f"📤 Exit Sum: `${total_exit_sum:.3f}` (A:{a_bid} B:{b_bid})\n"
+                        f"📈 Net: `+${net_profit:.4f}`\n"
+                        f"💳 Balance: `${CURRENT_BALANCE:.2f}`"
                     )
-                    send_tele(exit_msg, show_balance_btn=True)
+                    send_tele(exit_msg, True)
                     del ACTIVE_TRADES[market_id]
     except: pass
 
-# Balance ကို အချိန်မရွေး ကြည့်နိုင်ရန် Function (Manual trigger via logic/status)
-def get_balance_report():
-    return (
-        f"📊 *TOTAL PERFORMANCE REPORT*\n"
-        f"----------------------------\n"
-        f"💳 *Initial Capital:* `$1000.00`\n"
-        f"💰 *Total Profit:* `+${TOTAL_PROFIT:.4f}`\n"
-        f"💳 *Current Balance:* `${CURRENT_BALANCE:.2f}`\n"
-        f"🎯 *Active Trades:* `{len(ACTIVE_TRADES)}`"
-    )
-
-def run_v27_engine():
-    print(f"RN1 V27 | STEALTH + BUTTON | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v31_engine():
+    print(f"RN1 V31 | GIANT SCAN (1000) | {datetime.datetime.now().strftime('%H:%M:%S')}")
+    all_markets = []
+    
     try:
-        with httpx.Client(http2=True, headers=HEADERS, timeout=30.0) as client:
-            res = client.get("https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20")
-            if res.status_code == 200:
-                markets = res.json()
-                print(f"RN1 Scan | Active Responses: {len(markets)}") # မူရင်း Active Response ပြရန်
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    for m in markets:
-                        executor.submit(check_market_logic, m, client)
+        with httpx.Client(http2=True, headers=HEADERS, timeout=60.0) as client:
+            # ပွဲစဉ် ၁၀၀၀ ပြည့်အောင် Page ၁၀ ခု ဆွဲယူခြင်း (Offset 0 to 900)
+            for offset in range(0, 1000, 100):
+                api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
+                res = client.get(api_url)
+                if res.status_code == 200:
+                    all_markets.extend(res.json())
+                time.sleep(0.3) # API Rate limit ကို ရှောင်ရန်
             
-            # ၁ နာရီတစ်ခါ Balance အလိုအလျောက် ပို့ပေးခြင်း (Optional)
-            if datetime.datetime.now().minute == 0:
-                send_tele(get_balance_report(), show_balance_btn=True)
-                time.sleep(60)
-                
+            # မူရင်း Log format ကို ထိန်းသိမ်းထားခြင်း
+            print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
+            
+            if all_markets:
+                # ပွဲအရေအတွက် ၁၀၀၀ အတွက် Thread ပမာဏကို ၅၀ အထိ တိုးမြှင့်ထားသည်
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    for m in all_markets:
+                        executor.submit(check_market_logic, m, client)
+                        
     except Exception as e:
-        print(f"❌ Engine Error: {e}")
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V27: Arbitrage Pro Tracker Online!*", show_balance_btn=True)
+    send_tele("🚀 *RN1 V31: The Market Giant (1000 Events) Online!*", True)
     while True:
-        run_v27_engine()
-        time.sleep(random.randint(45, 75))
+        run_v31_engine()
+        # ပမာဏများသဖြင့် Cooldown Time ကို ညှိထားသည်
+        time.sleep(random.randint(90, 120))
