@@ -13,7 +13,7 @@ TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CURRENT_BALANCE = 1000.0 
 
-# --- UK Proxy Setup ---
+# --- UK Proxy Setup (31.59.20.176) ---
 PROXY_URL = "http://onzoyyph:hed0nyhkyw59@31.59.20.176:6754"
 proxies = {"http": PROXY_URL, "https": PROXY_URL}
 
@@ -29,57 +29,62 @@ def send_tele(msg):
 
 def check_market_data(m):
     try:
-        # Token information extraction
+        # Dictionary ထဲမှ လိုအပ်သော ဒေတာများကို တိကျစွာ ထုတ်ယူခြင်း
         tokens = m.get('tokens') or m.get('clobTokenIds')
         if not tokens: return False
         
-        # Format နှစ်မျိုးလုံးအတွက် စစ်ဆေးသည်
+        # Token ID Format အမျိုးမျိုးကို စစ်ဆေးခြင်း
         t_id = tokens[0].get('token_id') if isinstance(tokens[0], dict) else tokens[0]
         question = m.get('description') or m.get('question') or "Polymarket Event"
 
-        # Midpoint Price Check via Proxy
+        # Midpoint Price Check
         price_url = f"https://clob.polymarket.com/midpoint?token_id={t_id}"
         p_res = scraper.get(price_url, proxies=proxies, timeout=10)
         
         if p_res.status_code == 200:
             mid_p = float(p_res.json().get('mid_price', 0))
             if mid_p > 0:
-                send_tele(f"💎 *DATA RECEIVED*\n📌 {question}\n📈 Mid Price: `${mid_p:.3f}`")
+                send_tele(f"✅ *DATA RECEIVED*\n📌 {question}\n📈 Mid Price: `${mid_p:.3f}`")
                 return True
     except: return False
     return False
 
 def run_scanner():
-    print(f"RN1 V13 | UK IP: 31.59.20.176 | {datetime.datetime.now().strftime('%H:%M:%S')}")
+    print(f"RN1 V14 | UK IP: 31.59.20.176 | {datetime.datetime.now().strftime('%H:%M:%S')}")
     try:
-        # Sampling Markets သို့မဟုတ် Events Endpoint ကို သုံးခြင်း
+        # Endpoint ကို ခေါ်ယူခြင်း
         res = scraper.get("https://clob.polymarket.com/sampling-markets", proxies=proxies, timeout=20)
         
         if res.status_code == 200:
             data = res.json()
             
-            # Slice error မတက်အောင် list သို့မဟုတ် dict ဖြစ်မဖြစ် စစ်ဆေးခြင်း
-            markets = []
+            # Slice error ကို ကာကွယ်ရန် data type ကို အရင်စစ်ဆေးသည်
+            markets_list = []
             if isinstance(data, list):
-                markets = data
+                markets_list = data
             elif isinstance(data, dict):
-                markets = data.get('markets') or list(data.values())
+                # Dict ဖြစ်နေလျှင် 'markets' key ကို ရှာသည် သို့မဟုတ် values များကို ယူသည်
+                markets_list = data.get('markets', list(data.values()) if data else [])
             
-            if markets:
+            # ဒေတာရှိမှသာ လုပ်ဆောင်မည်
+            if markets_list and isinstance(markets_list, list):
                 found_count = 0
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    results = list(executor.map(check_market_data, markets[:30]))
+                # ထိပ်ဆုံး ပွဲ ၃၀ ကို scan ဖတ်မည်
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    results = list(executor.map(check_market_data, markets_list[:30]))
                     found_count = sum(1 for r in results if r)
                 
                 print(f"RN1 Scan | Active Responses: {found_count}")
+            else:
+                print("⚠️ No valid markets list found in response.")
         else:
-            print(f"⚠️ API Error: {res.status_code} (Bypassing...)")
+            print(f"⚠️ API Status Error: {res.status_code}")
             
     except Exception as e:
-        print(f"❌ Scanner Error: {e}")
+        print(f"❌ Critical Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🇬🇧 *RN1 V13: Ultimate Hybrid Mode Started!*")
+    send_tele("🛡️ *RN1 V14: Final Stable Engine Online!*")
     while True:
         run_scanner()
         time.sleep(45)
