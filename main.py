@@ -1,118 +1,104 @@
 import os
-import time
+import json
+import asyncio
+import websockets
 import requests
-import threading
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Configs & Telegram ---
-TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Bot API Token
-TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # သင့်ရဲ့ User ID
-START_BALANCE = 100.0
-TOTAL_BALANCE = 100.0
-TRADE_AMOUNT = 0.5
-TRADE_COUNT = 0
-GAS_FEE_ESTIMATE = 0.001
-MIN_PROFIT_GAP = 0.002
-PROFIT_MARGIN = 0.001
+# --- Configurations (Only Telegram needed for Paper Trading) ---
+TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Reporting & Session ---
-daily_trades = 0
-daily_profit = 0.0
-next_report_time = datetime.now() + timedelta(days=1)
-balance_lock = threading.Lock()
+# --- Paper Trading Parameters ---
+VIRTUAL_START_BALANCE = 100.0
+VIRTUAL_CURRENT_BALANCE = 100.0
+PAPER_TRADE_SIZE = 5.0    # Simulated trade size
+GAS_BUFFER = 0.02         # Simulated cost per trade
+MIN_NET_PROFIT = 0.05     
+PROFIT_MARGIN = 0.005     
 
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-})
+# --- Global State ---
+order_books = {}
 
-GREEN, YELLOW, CYAN, RED, RESET = '\033[92m', '\033[93m', '\033[96m', '\033[91m', '\033[0m'
-
-def send_telegram(message):
-    if not TELE_TOKEN or not TELE_CHAT_ID: return
-    url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
-    payload = {"chat_id": TELE_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+# --- 1. Telegram Notification System ---
+def send_tele(msg):
     try:
-        requests.post(url, json=payload, timeout=5)
-    except: pass
+        url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except:
+        pass
 
-def check_and_send_report():
-    global daily_trades, daily_profit, next_report_time
-    if datetime.now() >= next_report_time:
-        report = (
-            f"📅 *DAILY REPORT*\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"💰 Daily Profit: `${daily_profit:.4f}`\n"
-            f"🔄 Total Trades: `{daily_trades}`\n"
-            f"💳 Balance: `${TOTAL_BALANCE:.2f}`"
+# --- 2. Safety: 50% Stop-Loss Simulation ---
+def check_stop_loss():
+    global VIRTUAL_CURRENT_BALANCE
+    if VIRTUAL_CURRENT_BALANCE <= (VIRTUAL_START_BALANCE * 0.5):
+        alert = (
+            f"🛑 *PAPER STOP-LOSS TRIGGERED*\n"
+            f"Virtual Balance: `${VIRTUAL_CURRENT_BALANCE}`\n"
+            f"Simulation halted to analyze failure strategy."
         )
-        send_telegram(report)
-        daily_trades = 0
-        daily_profit = 0.0
-        next_report_time = datetime.now() + timedelta(days=1)
+        print(alert)
+        send_tele(alert)
+        os._exit(1) 
 
-def check_market(market, tag):
-    global TOTAL_BALANCE, TRADE_COUNT, daily_trades, daily_profit
+# --- 3. Slippage Calculation (Virtual Depth Check) ---
+def get_effective_price(asks, amount):
+    total_cost = 0
+    filled = 0
+    for ask in asks:
+        price, size = float(ask['price']), float(ask['size'])
+        take = min(size, amount - filled)
+        total_cost += take * price
+        filled += take
+        if filled >= amount: 
+            return total_cost / amount
+    return None
+
+# --- 4. Simulated Execution (No Private Key Required) ---
+async def simulate_trade(market_data, y_price, n_price, est_profit):
+    global VIRTUAL_CURRENT_BALANCE
     try:
-        y_url = f"https://clob.polymarket.com/price?token_id={market['tokens'][0]['token_id']}&side=BUY"
-        n_url = f"https://clob.polymarket.com/price?token_id={market['tokens'][1]['token_id']}&side=BUY"
+        check_stop_loss()
+
+        # Update virtual balance with the profit
+        VIRTUAL_CURRENT_BALANCE += est_profit
         
-        y_res = session.get(y_url, timeout=2)
-        n_res = session.get(n_url, timeout=2)
+        report = (
+            f"📝 *PAPER TRADE EXECUTED*\n"
+            f"📌 Event: `{market_data.get('question', 'Unknown')}`\n"
+            f"💰 Est. Profit: `+${est_profit:.4f}`\n"
+            f"💳 Virtual Bal: `${VIRTUAL_CURRENT_BALANCE:.2f}`\n"
+            f"📉 Entry Sum: `{(y_price + n_price):.3f}`"
+        )
+        print(report)
+        send_tele(report)
+    except Exception as e:
+        print(f"Simulation Error: {e}")
 
-        # Rate Limit Alert
-        if y_res.status_code == 429:
-            send_telegram("⚠️ *API Rate Limit Hit!* Bot is cooling down...")
-            return
+# --- 5. WebSocket Market Listener ---
+async def listen_markets():
+    uri = "wss://ws-subscriptions-clob.polymarket.com/ws/"
+    async with websockets.connect(uri) as ws:
+        await ws.send(json.dumps({"type": "subscribe", "topic": "book", "market_ids": ["*"]}))
+        
+        start_msg = (
+            f"🧪 *RN1 Paper Trading Bot Online*\n"
+            f"Initial Funds: `${VIRTUAL_START_BALANCE}`\n"
+            f"Status: Monitoring live markets (No real funds at risk)"
+        )
+        print(start_msg)
+        send_tele(start_msg)
 
-        y_p = float(y_res.json().get('price', 0))
-        n_p = float(n_res.json().get('price', 0))
-        total_sum = y_p + n_p
-
-        if 0 < total_sum < (1.0 - PROFIT_MARGIN):
-            net_profit = (TRADE_AMOUNT / total_sum) - TRADE_AMOUNT - GAS_FEE_ESTIMATE
-
-            if net_profit >= MIN_PROFIT_GAP:
-                with balance_lock:
-                    TRADE_COUNT += 1
-                    daily_trades += 1
-                    daily_profit += net_profit
-                    TOTAL_BALANCE += net_profit
-                    
-                    if TOTAL_BALANCE < (START_BALANCE * 0.5):
-                        send_telegram("🚨 *STOP-LOSS!* Balance dropped below 50%. Bot Killed.")
-                        os._exit(1)
-                    
-                    alert = (
-                        f"✅ *TRADE SUCCESS #{TRADE_COUNT}*\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"📊 Market: `{tag}`\n"
-                        f"💵 Profit: `+${net_profit:.4f}`\n"
-                        f"💳 Balance: `${TOTAL_BALANCE:.2f}`"
-                    )
-                    send_telegram(alert)
-                    print(f"{GREEN}[SUCCESS] Telegram Alert Sent.{RESET}")
-    except: pass
-
-def fast_scan():
-    check_and_send_report()
-    all_targets = []
-    try:
-        url = "https://clob.polymarket.com/markets?active=true"
-        res = session.get(url, timeout=5).json()
-        markets = res if isinstance(res, list) else res.get('data', [])
-        for m in markets[:40]: all_targets.append((m, "Live"))
-    except: pass
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        for market, tag in all_targets: executor.submit(check_market, market, tag)
+        while True:
+            msg = json.loads(await ws.recv())
+            if msg.get("event") == "book":
+                m_id = msg["market_id"]
+                order_books[m_id] = msg
+                # Arbitrage detection logic for linked tokens would be called here
 
 if __name__ == "__main__":
-    send_telegram("🚀 *RN1 Bot Online!* Starting Polymarket scan...")
-    while True:
-        fast_scan()
-        time.sleep(3)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(listen_markets())
+    
