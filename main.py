@@ -6,21 +6,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # RN1 Strategy Settings
-PROFIT_MARGIN = 0.0001   # အမြတ် ၀.၀၁% ရှိတာနဲ့ ဝယ်မယ် (RN1 စတိုင်)
-TOTAL_BALANCE = 100.0    # Virtual Wallet
-TRADE_AMOUNT = 0.5       # $0.5 ပဲသုံးပြီး အကြိမ်ရေ ရာနဲ့ချီ Trade မယ်
+PROFIT_MARGIN = 0.0001
+TOTAL_BALANCE = 100.0    
+TRADE_AMOUNT = 0.5       
+TRADE_COUNT = 0          # Trade အကြိမ်ရေ မှတ်ရန်
 
 GREEN = '\033[92m'
 YELLOW = '\033[93m'
 CYAN = '\033[96m'
 RESET = '\033[0m'
 
-# RN1 ရဲ့ နယ်ပယ်စုံ စစ်ဆေးမှု (Sports + Esports + Politics)
 MARKET_TAGS = ["Sports", "NBA", "Soccer", "Gaming", "Crypto", "Politics"]
 
-def rn1_scalping_mode():
-    global TOTAL_BALANCE
-    print(f"{CYAN}RN1 Scalper Mode Active. Wallet: ${TOTAL_BALANCE:.2f}{RESET}")
+def rn1_scalper_with_counter():
+    global TOTAL_BALANCE, TRADE_COUNT
+    print(f"\n{CYAN}RN1 Scalper Active | Wallet: ${TOTAL_BALANCE:.2f} | Total Trades: {TRADE_COUNT}{RESET}")
     
     for tag in MARKET_TAGS:
         try:
@@ -28,39 +28,32 @@ def rn1_scalping_mode():
             markets = requests.get(url, timeout=10).json()
             markets = markets if isinstance(markets, list) else markets.get('data', [])
             
-            # ပွဲပေါင်းများစွာကို အမြန်နှုန်းဖြင့် စစ်ဆေးခြင်း
-            for market in markets[:20]: # Tag တစ်ခုစီက ထိပ်ဆုံး ၂၀ ပွဲစီ
+            for market in markets[:15]:
                 try:
                     tokens = market.get('tokens', [])
                     if len(tokens) < 2: continue
                     
-                    # Live Price API
                     y_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}", timeout=3).json().get('price', 0))
                     n_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}", timeout=3).json().get('price', 0))
                     
                     if y_p > 0 and n_p > 0:
                         total_cost = y_p + n_p
                         
-                        # RN1 Strategy Logic: ဈေးကွက်ကွာဟချက် အနည်းငယ်ရှိတာနဲ့ ချက်ချင်းဝယ်
                         if total_cost <= (1.0 - PROFIT_MARGIN):
-                            print(f"\n{GREEN}[RN1 STYLE TRADE]")
-                            print(f"Tag: {tag} | Market: {market.get('question')[:40]}...")
+                            TRADE_COUNT += 1 # Trade ဖြစ်တိုင်း တစ်ခုတိုးမယ်
                             
-                            # Micro-amount Deduction
+                            # Trade Logic
                             TOTAL_BALANCE -= TRADE_AMOUNT
-                            print(f"{YELLOW}Buy: ${TRADE_AMOUNT:.2f} | Wallet: ${TOTAL_BALANCE:.2f}{RESET}")
-                            
-                            # Scalping Profit
                             shares = TRADE_AMOUNT / total_cost
                             profit = shares - TRADE_AMOUNT
                             TOTAL_BALANCE += (TRADE_AMOUNT + profit)
-                            print(f"Settled: New Balance ${TOTAL_BALANCE:.2f}")
-                            print("-" * 20)
+                            
+                            print(f"{GREEN}[TRADE #{TRADE_COUNT}] {tag} - {market.get('question')[:30]}... {RESET}")
+                            print(f"{YELLOW}   Profit Added! New Balance: ${TOTAL_BALANCE:.2f}{RESET}")
                 except: continue
         except: continue
 
 if __name__ == "__main__":
     while True:
-        rn1_scalping_mode()
-        # RN1 လိုမျိုး မြန်မြန်ဆန်ဆန် ပြန်စစ်ဆေးဖို့ စောင့်ဆိုင်းချိန် လျှော့ချထားသည်
-        time.sleep(5) 
+        rn1_scalper_with_counter()
+        time.sleep(10) # ဈေးကွက်ကို ၁၀ စက္ကန့်တစ်ခါ အမြန်ပြန်စစ်မည်
