@@ -1,59 +1,59 @@
 import os
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# RN1 Strategy Settings
+# Aggressive Settings
 PROFIT_MARGIN = 0.0001
-TOTAL_BALANCE = 100.0    
-TRADE_AMOUNT = 0.5       
-TRADE_COUNT = 0          # Trade အကြိမ်ရေ မှတ်ရန်
+TOTAL_BALANCE = 100.0
+TRADE_AMOUNT = 0.5
+TRADE_COUNT = 0
 
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-CYAN = '\033[96m'
-RESET = '\033[0m'
-
+GREEN, YELLOW, CYAN, RESET = '\033[92m', '\033[93m', '\033[96m', '\033[0m'
 MARKET_TAGS = ["Sports", "NBA", "Soccer", "Gaming", "Crypto", "Politics"]
 
-def rn1_scalper_with_counter():
+def check_market(market, tag):
     global TOTAL_BALANCE, TRADE_COUNT
-    print(f"\n{CYAN}RN1 Scalper Active | Wallet: ${TOTAL_BALANCE:.2f} | Total Trades: {TRADE_COUNT}{RESET}")
+    try:
+        tokens = market.get('tokens', [])
+        if len(tokens) < 2: return
+        
+        # Prices ကို Concurrent ဖြစ်အောင် Timeout တိုတိုနဲ့ ဆွဲယူမယ်
+        y_url = f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}&side=BUY"
+        n_url = f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}&side=BUY"
+        
+        y_p = float(requests.get(y_url, timeout=2).json().get('price', 0))
+        n_p = float(requests.get(n_url, timeout=2).json().get('price', 0))
+        
+        if y_p > 0 and n_p > 0 and (y_p + n_p) <= (1.0 - PROFIT_MARGIN):
+            TRADE_COUNT += 1
+            profit = (TRADE_AMOUNT / (y_p + n_p)) - TRADE_AMOUNT
+            TOTAL_BALANCE += profit
+            print(f"{GREEN}[TRADE #{TRADE_COUNT}] {tag} Found! Balance: ${TOTAL_BALANCE:.2f}{RESET}")
+    except: pass
+
+def aggressive_scan():
+    print(f"\n{CYAN}--- Aggressive Cycle Starting | Trades: {TRADE_COUNT} | Wallet: ${TOTAL_BALANCE:.2f} ---{RESET}")
     
+    all_markets_to_check = []
     for tag in MARKET_TAGS:
         try:
             url = f"https://clob.polymarket.com/markets?tag={tag}&active=true"
-            markets = requests.get(url, timeout=10).json()
-            markets = markets if isinstance(markets, list) else markets.get('data', [])
-            
-            for market in markets[:15]:
-                try:
-                    tokens = market.get('tokens', [])
-                    if len(tokens) < 2: continue
-                    
-                    y_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}", timeout=3).json().get('price', 0))
-                    n_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}", timeout=3).json().get('price', 0))
-                    
-                    if y_p > 0 and n_p > 0:
-                        total_cost = y_p + n_p
-                        
-                        if total_cost <= (1.0 - PROFIT_MARGIN):
-                            TRADE_COUNT += 1 # Trade ဖြစ်တိုင်း တစ်ခုတိုးမယ်
-                            
-                            # Trade Logic
-                            TOTAL_BALANCE -= TRADE_AMOUNT
-                            shares = TRADE_AMOUNT / total_cost
-                            profit = shares - TRADE_AMOUNT
-                            TOTAL_BALANCE += (TRADE_AMOUNT + profit)
-                            
-                            print(f"{GREEN}[TRADE #{TRADE_COUNT}] {tag} - {market.get('question')[:30]}... {RESET}")
-                            print(f"{YELLOW}   Profit Added! New Balance: ${TOTAL_BALANCE:.2f}{RESET}")
-                except: continue
+            data = requests.get(url, timeout=5).json()
+            markets = data if isinstance(data, list) else data.get('data', [])
+            for m in markets[:10]: # Tag တစ်ခုစီက ထိပ်ဆုံး ၁၀ ပွဲ
+                all_markets_to_check.append((m, tag))
         except: continue
+
+    # Thread 10 ခု သုံးပြီး တပြိုင်နက် စစ်ဆေးမယ် (Aggressive Part)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        for market, tag in all_markets_to_check:
+            executor.submit(check_market, market, tag)
 
 if __name__ == "__main__":
     while True:
-        rn1_scalper_with_counter()
-        time.sleep(10) # ဈေးကွက်ကို ၁၀ စက္ကန့်တစ်ခါ အမြန်ပြန်စစ်မည်
+        aggressive_scan()
+        time.sleep(2) # အနားပေးချိန်ကို ၂ စက္ကန့်အထိ လျှော့ချထားသည်
