@@ -1,104 +1,91 @@
 import os
-import json
-import asyncio
-import websockets
+import time
 import requests
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Configurations (Only Telegram needed for Paper Trading) ---
+# --- Configurations ---
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Paper Trading Parameters ---
-VIRTUAL_START_BALANCE = 100.0
-VIRTUAL_CURRENT_BALANCE = 100.0
-PAPER_TRADE_SIZE = 5.0    # Simulated trade size
-GAS_BUFFER = 0.02         # Simulated cost per trade
-MIN_NET_PROFIT = 0.05     
-PROFIT_MARGIN = 0.005     
+# --- Paper Trading Logic ($100 Start) ---
+START_BALANCE = 100.0
+CURRENT_BALANCE = 100.0
+TRADE_SIZE = 5.0      # Paper trade amount
+GAS_BUFFER = 0.02     # Simulated Polygon fee
+MIN_NET_PROFIT = 0.05 # Minimum profit to trigger log
+PROFIT_MARGIN = 0.005 # Slippage protection buffer
 
-# --- Global State ---
-order_books = {}
+balance_lock = threading.Lock()
+session = requests.Session()
 
-# --- 1. Telegram Notification System ---
 def send_tele(msg):
+    if not TELE_TOKEN: return
+    url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     try:
-        url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    except:
-        pass
+        requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
+    except: pass
 
-# --- 2. Safety: 50% Stop-Loss Simulation ---
 def check_stop_loss():
-    global VIRTUAL_CURRENT_BALANCE
-    if VIRTUAL_CURRENT_BALANCE <= (VIRTUAL_START_BALANCE * 0.5):
-        alert = (
-            f"🛑 *PAPER STOP-LOSS TRIGGERED*\n"
-            f"Virtual Balance: `${VIRTUAL_CURRENT_BALANCE}`\n"
-            f"Simulation halted to analyze failure strategy."
-        )
-        print(alert)
-        send_tele(alert)
-        os._exit(1) 
+    global CURRENT_BALANCE
+    # Stop if virtual funds drop below 50%
+    if CURRENT_BALANCE <= (START_BALANCE * 0.5):
+        msg = f"🛑 *CRITICAL STOP-LOSS*\nBalance: `${CURRENT_BALANCE}`\nBot Paused."
+        send_tele(msg)
+        os._exit(1)
 
-# --- 3. Slippage Calculation (Virtual Depth Check) ---
-def get_effective_price(asks, amount):
-    total_cost = 0
-    filled = 0
-    for ask in asks:
-        price, size = float(ask['price']), float(ask['size'])
-        take = min(size, amount - filled)
-        total_cost += take * price
-        filled += take
-        if filled >= amount: 
-            return total_cost / amount
-    return None
-
-# --- 4. Simulated Execution (No Private Key Required) ---
-async def simulate_trade(market_data, y_price, n_price, est_profit):
-    global VIRTUAL_CURRENT_BALANCE
+def check_arbitrage(market):
+    global CURRENT_BALANCE
     try:
-        check_stop_loss()
-
-        # Update virtual balance with the profit
-        VIRTUAL_CURRENT_BALANCE += est_profit
+        title = market.get('question', 'Unknown Market')
+        # Use stable REST API instead of WebSocket to avoid 404 error
+        y_id = market['tokens'][0]['token_id']
+        n_id = market['tokens'][1]['token_id']
         
-        report = (
-            f"📝 *PAPER TRADE EXECUTED*\n"
-            f"📌 Event: `{market_data.get('question', 'Unknown')}`\n"
-            f"💰 Est. Profit: `+${est_profit:.4f}`\n"
-            f"💳 Virtual Bal: `${VIRTUAL_CURRENT_BALANCE:.2f}`\n"
-            f"📉 Entry Sum: `{(y_price + n_price):.3f}`"
-        )
-        print(report)
-        send_tele(report)
+        y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
+        n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
+        
+        y_price = float(y_res.get('price', 0))
+        n_price = float(n_res.get('price', 0))
+        total_sum = y_price + n_price
+
+        # Arbitrage Detection Logic
+        if 0 < total_sum < (1.0 - PROFIT_MARGIN):
+            gross_profit = (TRADE_SIZE / total_sum) - TRADE_SIZE
+            net_profit = gross_profit - GAS_BUFFER
+
+            if net_profit >= MIN_NET_PROFIT:
+                with balance_lock:
+                    check_stop_loss()
+                    CURRENT_BALANCE += net_profit
+                    msg = (
+                        f"✅ *PAPER ARBITRAGE FOUND*\n"
+                        f"📌 {title}\n"
+                        f"💰 Profit: `+${net_profit:.4f}`\n"
+                        f"💳 Virtual Bal: `${CURRENT_BALANCE:.2f}`"
+                    )
+                    send_tele(msg)
+    except: pass
+
+def run_scanner():
+    print(f"RN1 Scan Loop | Bal: ${CURRENT_BALANCE:.2f}")
+    try:
+        # Fetching active markets
+        res = session.get("https://clob.polymarket.com/markets?active=true", timeout=5).json()
+        markets = res if isinstance(res, list) else res.get('data', [])
+        
+        # Parallel scanning for speed
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            for m in markets[:20]: # Scan top 20 active markets
+                executor.submit(check_arbitrage, m)
     except Exception as e:
-        print(f"Simulation Error: {e}")
-
-# --- 5. WebSocket Market Listener ---
-async def listen_markets():
-    uri = "wss://ws-subscriptions-clob.polymarket.com/ws/"
-    async with websockets.connect(uri) as ws:
-        await ws.send(json.dumps({"type": "subscribe", "topic": "book", "market_ids": ["*"]}))
-        
-        start_msg = (
-            f"🧪 *RN1 Paper Trading Bot Online*\n"
-            f"Initial Funds: `${VIRTUAL_START_BALANCE}`\n"
-            f"Status: Monitoring live markets (No real funds at risk)"
-        )
-        print(start_msg)
-        send_tele(start_msg)
-
-        while True:
-            msg = json.loads(await ws.recv())
-            if msg.get("event") == "book":
-                m_id = msg["market_id"]
-                order_books[m_id] = msg
-                # Arbitrage detection logic for linked tokens would be called here
+        print(f"Scanner Error: {e}")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(listen_markets())
-    
+    send_tele("🧪 *RN1 Paper Bot Started*\nSimulation Budget: `$100.00`")
+    while True:
+        run_scanner()
+        time.sleep(10) # 10s interval to prevent rate limit
