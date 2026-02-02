@@ -13,7 +13,7 @@ TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # --- Strategy & Risk Logic ---
-# သင်အလိုရှိသည့်အတိုင်း $1000 နှင့် $20 သို့ ပြောင်းလဲထားသည်
+# သင်အလိုရှိသည့်အတိုင်း Capital $1000 နှင့် Trade Size $20 (Yes/No ပေါင်းလျှင် $40 ဝန်းကျင်) သို့ ပြင်ဆင်ထားသည်
 CURRENT_BALANCE = 1000.0 
 PEAK_BALANCE = 1000.0
 DRAWDOWN_LIMIT = 0.5
@@ -52,7 +52,7 @@ def send_daily_report():
             f"📅 *DAILY PERFORMANCE REPORT*\n"
             f"🎯 Total Profits Taken: `{TOTAL_TRADES_TODAY}`\n"
             f"💰 Daily Profit: `+${TOTAL_PROFIT_TODAY:.4f}`\n"
-            f"💳 Balance: `${CURRENT_BALANCE:.2f}`"
+            f"💳 Balance: `{CURRENT_BALANCE:.2f}`"
         )
         send_tele(report_msg)
         TOTAL_TRADES_TODAY = 0
@@ -63,25 +63,24 @@ def check_spread_strategy(market):
     global CURRENT_BALANCE, TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY, ACTIVE_TRADES
     try:
         question = market.get('question', '')
-        # Sports Filter
+        # Sports Filter & Year Filter (၂၀၂၃ ပွဲများမဝင်စေရန်)
         is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'tournament', 'cup', 'league'])
-        if not is_sports: return
+        is_old = any(yr in question for yr in ['2022', '2023', '2024'])
+        if not is_sports or is_old: return
 
         market_id = market.get('condition_id')
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ၁။ Entry Check: ဈေးနှုန်းအတိအကျရရှိမှသာ Telegram ပို့ရန်
+        # ၁။ Entry Check: Yes/No ဈေးနှုန်း အတိအကျရမှသာ Entry ဝင်ရန်
         if market_id not in ACTIVE_TRADES:
-            # BUY side ဈေးနှုန်းကို တိုက်ရိုက်ဆွဲယူခြင်း
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
             
-            # ဈေးနှုန်းများကို Float ပြောင်းလဲခြင်း
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
-            # ဈေးနှုန်း 0 ဖြစ်နေပါက ပွဲဟောင်းဖြစ်နေ၍ ကျော်သွားမည် (Screenshot ပြဿနာဖြေရှင်းချက်)
+            # ဈေးနှုန်း 0 ဖြစ်နေပါက ပွဲဟောင်းဖြစ်နေ၍ ကျော်သွားမည်
             if y_p <= 0.001 or n_p <= 0.001: return
 
             ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
@@ -90,15 +89,14 @@ def check_spread_strategy(market):
                 f"🏟️ *NEW ENTRY (LIVE 2026)*\n"
                 f"📌 {question}\n"
                 f"----------------------------\n"
-                f"🟢 Yes Entry Price: `${y_p:.3f}`\n"
-                f"🔴 No Entry Price: `${n_p:.3f}`\n"
+                f"🟢 *Yes Entry Price:* `${y_p:.3f}`\n"
+                f"🔴 *No Entry Price:* `${n_p:.3f}`\n"
                 f"💵 Trade Size: `${TRADE_SIZE}` | Capital: `${CURRENT_BALANCE}`"
             )
             send_tele(entry_msg)
-            print(f"Entry Start: {question} | Y: {y_p} N: {n_p}")
             return
 
-        # ၂။ Exit Check: အသေးစိတ် Profit Message
+        # ၂။ Exit Check: Profit ဈေးနှုန်း အတိအကျဖြင့် ထွက်ရန်
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=3).json()
         y_bid = float(y_res.get('price', 0))
@@ -124,7 +122,7 @@ def check_spread_strategy(market):
                     f"📈 Total Sum: `${current_exit_sum:.3f}`\n"
                     f"----------------------------\n"
                     f"💵 Net Profit: `+${net_profit:.4f}`\n"
-                    f"💳 New Balance: `{CURRENT_BALANCE:.2f}`"
+                    f"💳 Total Balance: `{CURRENT_BALANCE:.2f}`"
                 )
                 send_tele(exit_msg)
                 del ACTIVE_TRADES[market_id]
@@ -132,10 +130,12 @@ def check_spread_strategy(market):
 
 def run_scanner():
     send_daily_report()
+    # လက်ရှိ active ဖြစ်နေသော ပွဲစဉ်များကို log တွင်ပြရန်
     print(f"RN1 Scan | Bal: ${CURRENT_BALANCE:.2f} | Active: {len(ACTIVE_TRADES)}")
     try:
-        # လက်ရှိဖွင့်ထားသော ပွဲများကိုသာ ဆွဲယူရန် Parameters ပြင်ဆင်ခြင်း
-        res = session.get("https://clob.polymarket.com/markets?active=true&closed=false&limit=100", timeout=10).json()
+        # လက်ရှိဖွင့်ထားသော (closed မဖြစ်သေးသော) ပွဲများကိုသာ ဆွဲယူရန်
+        api_url = "https://clob.polymarket.com/markets?active=true&closed=false&limit=100"
+        res = session.get(api_url, timeout=10).json()
         markets = res if isinstance(res, list) else res.get('data', [])
         with ThreadPoolExecutor(max_workers=20) as executor:
             for m in markets:
