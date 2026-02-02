@@ -5,54 +5,51 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Wallet Settings
+# Strategy Settings (အမြတ်အစစ်ရှာမည့် ပတ်ဝန်းကျင်)
+PROFIT_MARGIN = 0.003    # 0.3% Profit Target
 TOTAL_BALANCE = 100.0    
-TRADE_AMOUNT = 50.0      # ဝယ်လိုက်ရင် $50 တစ်ခါတည်း လျော့သွားတာ မြင်ရအောင် $50 ထားလိုက်မယ်
+TRADE_AMOUNT = 10.0      
 
 GREEN = '\033[92m'
-YELLOW = '\033[93m'
 CYAN = '\033[96m'
 RESET = '\033[0m'
 
-def force_test_trade():
+def real_strategy_scan():
     global TOTAL_BALANCE
-    print(f"{CYAN}Testing Instant Trade Logic... Balance: ${TOTAL_BALANCE:.2f}{RESET}")
+    print(f"{CYAN}Real Strategy Active. Scanning for 0.3% Profit... Balance: ${TOTAL_BALANCE:.2f}{RESET}")
     
     try:
-        # Polymarket API ကနေ Active ဖြစ်နေတဲ့ ပွဲတွေကို ယူမယ်
         url = "https://clob.polymarket.com/markets?active=true"
-        response = requests.get(url, timeout=10).json()
-        markets = response if isinstance(response, list) else response.get('data', [])
+        markets = requests.get(url, timeout=10).json()
+        markets = markets if isinstance(markets, list) else markets.get('data', [])
         
-        if not markets:
-            print("No markets found to trade.")
-            return
-
-        # ပထမဆုံးတွေ့တဲ့ ပွဲကိုပဲ ဈေးမရွေးဘဲ ဝယ်ပစ်မယ်
-        market = markets[0]
-        question = market.get('question', 'Unknown Market')
-        
-        print(f"\n{YELLOW}Step 1: Found Market -> {question[:50]}...{RESET}")
-        
-        # Balance လျော့သွားတာကို အရင်ပြမယ်
-        print(f"{GREEN}[EXECUTION] Buying Shares for ${TRADE_AMOUNT:.2f}...{RESET}")
-        TOTAL_BALANCE -= TRADE_AMOUNT
-        print(f"WALLET UPDATE: Balance decreased to {YELLOW}${TOTAL_BALANCE:.2f}{RESET}")
-        
-        # ခဏစောင့်ပြီး အမြတ်ပြန်ပေါင်းပြမယ်
-        time.sleep(2)
-        simulated_profit = 1.50 # စမ်းသပ်ဖို့အတွက် အမြတ် $1.50 ရတယ်လို့ ထားလိုက်မယ်
-        TOTAL_BALANCE += (TRADE_AMOUNT + simulated_profit)
-        
-        print(f"{GREEN}[SUCCESS] Trade Settled. Profit: ${simulated_profit:.2f}")
-        print(f"NEW BALANCE: ${TOTAL_BALANCE:.2f}{RESET}\n")
-        
-    except Exception as e:
-        print(f"Error during test: {e}")
+        for market in markets[:100]:
+            try:
+                tokens = market.get('tokens', [])
+                y_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[0]['token_id']}", timeout=3).json().get('price', 0))
+                n_p = float(requests.get(f"https://clob.polymarket.com/price?token_id={tokens[1]['token_id']}", timeout=3).json().get('price', 0))
+                
+                if y_p > 0 and n_p > 0:
+                    total_cost = y_p + n_p
+                    # အမြတ်တကယ်ရှိမှ ဝယ်မည့် Logic
+                    if total_cost <= (1.0 - PROFIT_MARGIN):
+                        print(f"\n{GREEN}[!!! REAL OPPORTUNITY FOUND !!!]")
+                        print(f"Market: {market.get('question')[:50]}")
+                        
+                        # ဝယ်ယူခြင်း
+                        TOTAL_BALANCE -= TRADE_AMOUNT
+                        print(f"Action: Invested ${TRADE_AMOUNT:.2f} | Wallet: ${TOTAL_BALANCE:.2f}")
+                        
+                        # အမြတ်တွက်ချက်ခြင်း
+                        profit = (1.0 - total_cost) * (TRADE_AMOUNT / total_cost)
+                        TOTAL_BALANCE += (TRADE_AMOUNT + profit)
+                        print(f"Settled: New Balance ${TOTAL_BALANCE:.2f}{RESET}")
+                        print("-" * 30)
+            except: continue
+        print(f"Scan complete. Waiting for next cycle...")
+    except: print("API Connection Busy...")
 
 if __name__ == "__main__":
-    print(f"{GREEN}Force-Trade Script Started.{RESET}")
     while True:
-        force_test_trade()
-        print("Waiting 10 seconds for next test...")
-        time.sleep(10)
+        real_strategy_scan()
+        time.sleep(15)
