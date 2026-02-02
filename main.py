@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import threading
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
@@ -11,13 +12,17 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Spread Trading & Risk Logic ---
+# --- Strategy & Risk Logic ---
 CURRENT_BALANCE = 100.0
 PEAK_BALANCE = 100.0
-DRAWDOWN_LIMIT = 0.5    # 50% Drawdown Limit
-TRADE_SIZE = 10.0       # Entry size ($1.00 ဝယ်ရင်း)
+DRAWDOWN_LIMIT = 0.5    # 50% Drawdown
+TRADE_SIZE = 10.0       # $1.00 Entry အခြေခံ
 GAS_BUFFER = 0.01       
-MIN_EXIT_PROFIT = 0.02  # $1.02 ကျော်မှ အမြတ်ထုတ်မည်
+MIN_EXIT_PROFIT = 0.02  # $1.02 ကျော်မှ အမြတ်ယူရန်
+
+# --- Daily Report Tracker ---
+TOTAL_TRADES_TODAY = 0
+TOTAL_PROFIT_TODAY = 0.0
 
 balance_lock = threading.Lock()
 session = requests.Session()
@@ -35,35 +40,58 @@ def check_risk_management():
     
     allowed_floor = PEAK_BALANCE * (1 - DRAWDOWN_LIMIT)
     if CURRENT_BALANCE <= allowed_floor:
-        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak `${PEAK_BALANCE}`. Stopping.")
+        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak `${PEAK_BALANCE}`.")
         os._exit(1)
 
+def send_daily_report():
+    global TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY
+    now = datetime.datetime.now()
+    
+    # မနက် ၉ နာရီ (09:00) တွင် Report ပို့ရန် ပြောင်းလဲထားသည်
+    if now.hour == 9 and now.minute == 0:
+        report_msg = (
+            f"📅 *DAILY PERFORMANCE REPORT*\n"
+            f"*(Sent at 09:00 AM)*\n"
+            f"----------------------------\n"
+            f"🎯 Total Times Hit $1.02: `{TOTAL_TRADES_TODAY}`\n"
+            f"💰 Total Daily Profit: `+${TOTAL_PROFIT_TODAY:.4f}`\n"
+            f"💳 Current Balance: `${CURRENT_BALANCE:.2f}`\n"
+            f"📈 Max Peak Reached: `${PEAK_BALANCE:.2f}`\n"
+            f"----------------------------"
+        )
+        send_tele(report_msg)
+        # Reset data for next 24 hours
+        TOTAL_TRADES_TODAY = 0
+        TOTAL_PROFIT_TODAY = 0.0
+        time.sleep(61) # တစ်မိနစ်အတွင်း နှစ်ခါမပို့မိစေရန်
+
 def check_spread_strategy(market):
-    global CURRENT_BALANCE
+    global CURRENT_BALANCE, TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY
     try:
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ရောင်းမည့်ဈေး (Sell/Bid Price) ကို စစ်ဆေးခြင်း
-        # အဆင့် ၁ မှာ $1.00 နဲ့ ဝယ်ထားပြီးသားဟု ယူဆသည်
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=3).json()
         
-        y_bid = float(y_res.get('price', 0)) # ပြန်ရောင်းရမည့်ဈေး
-        n_bid = float(n_res.get('price', 0)) # ပြန်ရောင်းရမည့်ဈေး
+        y_bid = float(y_res.get('price', 0))
+        n_bid = float(n_res.get('price', 0))
         current_exit_sum = y_bid + n_bid
 
-        # အဆင့် ၃ - Exit Strategy: ပေါင်းလဒ် $1 ထက်ကျော်မှ အမြတ်ယူခြင်း
+        # Entry $1.00 မှစတင်၍ $1.02 တွင် အမြတ်ယူခြင်း
         if current_exit_sum > (1.0 + MIN_EXIT_PROFIT):
             net_profit = (TRADE_SIZE * current_exit_sum) - TRADE_SIZE - GAS_BUFFER
             
             with balance_lock:
                 check_risk_management()
                 CURRENT_BALANCE += net_profit
+                TOTAL_TRADES_TODAY += 1
+                TOTAL_PROFIT_TODAY += net_profit
+                
                 msg = (
                     f"💰 *SPREAD PROFIT CAPTURED*\n"
                     f"📌 {market.get('question')}\n"
-                    f"----------------------------\n"
+                    f"🟢 Yes Sell: `${y_bid:.3f}` | 🔴 No Sell: `${n_bid:.3f}`\n"
                     f"📈 Exit Sum: `${current_exit_sum:.3f}`\n"
                     f"💵 Profit: `+${net_profit:.4f}`\n"
                     f"💳 Bal: `${CURRENT_BALANCE:.2f}`"
@@ -72,12 +100,13 @@ def check_spread_strategy(market):
     except: pass
 
 def run_scanner():
+    send_daily_report()
     print(f"RN1 Spread Scan | Bal: ${CURRENT_BALANCE:.2f} | Peak: ${PEAK_BALANCE:.2f}")
     try:
-        res = session.get("https://clob.polymarket.com/markets?active=true&limit=500", timeout=10).json()
+        res = session.get("https://clob.polymarket.com/markets?active=true&limit=1000", timeout=10).json()
         markets = res if isinstance(res, list) else res.get('data', [])
         
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        with ThreadPoolExecutor(max_workers=20) as executor:
             for m in markets:
                 if 'tokens' in m and len(m['tokens']) >= 2:
                     executor.submit(check_spread_strategy, m)
@@ -85,7 +114,7 @@ def run_scanner():
         print(f"Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🎯 *Spread Capture Bot Online!* (Paper Trading Mode)")
+    send_tele("🎯 *RN1 Professional Spread Bot Online!*")
     while True:
         run_scanner()
-        time.sleep(10)
+        time.sleep(5) # ၅ စက္ကန့်တစ်ခါ အမြန်စစ်ဆေးခြင်း
