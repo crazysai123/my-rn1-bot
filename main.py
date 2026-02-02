@@ -15,13 +15,13 @@ TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- Strategy & Risk Logic ---
 CURRENT_BALANCE = 100.0
 PEAK_BALANCE = 100.0
-DRAWDOWN_LIMIT = 0.5
+DRAWDOWN_LIMIT = 0.5    # 50% Drawdown
 TRADE_SIZE = 10.0       
 GAS_BUFFER = 0.01       
-MIN_EXIT_PROFIT = 0.02  
+MIN_EXIT_PROFIT = 0.02  # 1.02 ကျော်မှ အမြတ်ယူရန်
 
 # --- Trackers ---
-ACTIVE_TRADES = {} # Entry ဝင်ထားသော ပွဲစဉ်များကို သိမ်းဆည်းရန်
+ACTIVE_TRADES = {} 
 TOTAL_TRADES_TODAY = 0
 TOTAL_PROFIT_TODAY = 0.0
 
@@ -31,6 +31,7 @@ session = requests.Session()
 def send_tele(msg):
     if not TELE_TOKEN: return
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
+    # Markdown ပုံစံဖြင့် ပို့ဆောင်ရန် ပြင်ဆင်ထားသည်
     try: requests.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
@@ -40,7 +41,7 @@ def check_risk_management():
         PEAK_BALANCE = CURRENT_BALANCE
     allowed_floor = PEAK_BALANCE * (1 - DRAWDOWN_LIMIT)
     if CURRENT_BALANCE <= allowed_floor:
-        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak `${PEAK_BALANCE}`.")
+        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak.")
         os._exit(1)
 
 def send_daily_report():
@@ -49,9 +50,9 @@ def send_daily_report():
     if now.hour == 9 and now.minute == 0:
         report_msg = (
             f"📅 *DAILY PERFORMANCE REPORT*\n"
-            f"🎯 Total Profits Taken: `{TOTAL_TRADES_TODAY}`\n"
+            f"🎯 Profit Targets Hit: `{TOTAL_TRADES_TODAY}`\n"
             f"💰 Daily Profit: `+${TOTAL_PROFIT_TODAY:.4f}`\n"
-            f"💳 Balance: `${CURRENT_BALANCE:.2f}`"
+            f"💳 Final Balance: `${CURRENT_BALANCE:.2f}`"
         )
         send_tele(report_msg)
         TOTAL_TRADES_TODAY = 0
@@ -62,21 +63,24 @@ def check_spread_strategy(market):
     global CURRENT_BALANCE, TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY, ACTIVE_TRADES
     try:
         question = market.get('question', '')
-        # Sports ပွဲစဉ်များသာ ဖြစ်စေရန် စစ်ထုတ်ခြင်း
-        is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'tournament', 'cup', 'league'])
+        # Sports ပွဲများကိုသာ စစ်ထုတ်ခြင်း
+        is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'cup', 'league'])
         if not is_sports: return
 
         market_id = market.get('condition_id')
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ၁။ Entry Check: ပွဲသစ်တွေ့လျှင် $1.00 ဖြင့် Virtual Entry ဝင်မည်
+        # ၁။ Entry Check: Yes/No ဈေးနှုန်းများပြသရန်
         if market_id not in ACTIVE_TRADES:
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
+            # ဈေးနှုန်း 0 ဖြစ်နေလျှင် ကျော်သွားရန်
+            if y_p == 0 or n_p == 0: return
+
             ACTIVE_TRADES[market_id] = {'y': y_p, 'n': n_p}
             
             entry_msg = (
@@ -85,13 +89,12 @@ def check_spread_strategy(market):
                 f"----------------------------\n"
                 f"🟢 Yes Entry: `${y_p:.3f}`\n"
                 f"🔴 No Entry: `${n_p:.3f}`\n"
-                f"💵 Total Capital: `$1.000`"
+                f"💵 Capital: `$1.000`"
             )
             send_tele(entry_msg)
-            print(f"Entry Start: {question}")
             return
 
-        # ၂။ Exit Check: $1.02 ကျော်မကျော် စစ်ဆေးခြင်း
+        # ၂။ Exit Check: Profit Message နှင့် Balance Update
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=3).json()
         y_bid = float(y_res.get('price', 0))
@@ -106,12 +109,14 @@ def check_spread_strategy(market):
                 TOTAL_TRADES_TODAY += 1
                 TOTAL_PROFIT_TODAY += net_profit
                 
+                # Profit ထွက်သည့် Message (Balance ကို နှိပ်၍ရအောင် လုပ်ထားသည်)
                 exit_msg = (
-                    f"💰 *PROFIT CAPTURED*\n"
+                    f"💰 *PROFIT CAPTURED (1.0+)*\n"
                     f"📌 {question}\n"
                     f"📈 Exit Sum: `${current_exit_sum:.3f}`\n"
                     f"💵 Net Profit: `+${net_profit:.4f}`\n"
-                    f"💳 New Bal: `${CURRENT_BALANCE:.2f}`"
+                    f"----------------------------\n"
+                    f"💳 Total Balance: `{CURRENT_BALANCE:.2f}`" 
                 )
                 send_tele(exit_msg)
                 del ACTIVE_TRADES[market_id]
@@ -131,7 +136,7 @@ def run_scanner():
         print(f"Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🎯 *RN1 Sports Tracker Online!*")
+    send_tele("🎯 *RN1 Pro Sports Bot Online!*")
     while True:
         run_scanner()
         time.sleep(5)
