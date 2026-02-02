@@ -33,7 +33,6 @@ def check_arbitrage(market):
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # REST API ကို သုံး၍ ဈေးနှုန်းစစ်ဆေးခြင်း
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
         
@@ -46,7 +45,18 @@ def check_arbitrage(market):
             if net_profit >= MIN_NET_PROFIT:
                 with balance_lock:
                     CURRENT_BALANCE += net_profit
-                    send_tele(f"✅ *PAPER TRADE SUCCESS*\n📌 {market.get('question')}\n💰 Profit: `+${net_profit:.4f}`\n💳 Bal: `${CURRENT_BALANCE:.2f}`")
+                    msg = (
+                        f"✅ *PAPER TRADE SUCCESS*\n"
+                        f"📌 {market.get('question')}\n"
+                        f"----------------------------\n"
+                        f"🟢 Yes Price: `${y_p:.3f}`\n"
+                        f"🔴 No Price: `${n_p:.3f}`\n"
+                        f"📊 Total Cost: `${total_sum:.3f}`\n"
+                        f"----------------------------\n"
+                        f"💰 Profit: `+${net_profit:.4f}`\n"
+                        f"💳 Bal: `${CURRENT_BALANCE:.2f}`"
+                    )
+                    send_tele(msg)
     except: pass
 
 def run_scanner():
