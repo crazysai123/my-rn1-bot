@@ -20,7 +20,7 @@ TRADE_SIZE = 20.0
 GAS_BUFFER = 0.01       
 EXIT_THRESHOLD = 1.02  
 
-# သင်အလိုရှိသည့်အတိုင်း Entry Range ကို အစွန်းရောက်ချဲ့ထားသည် (စမ်းသပ်ရန်)
+# Entry Range (စမ်းသပ်ရန် 0.50 - 1.50 ထားရှိဆဲဖြစ်သည်)
 ENTRY_RANGE_MIN = 0.50
 ENTRY_RANGE_MAX = 1.50
 
@@ -38,65 +38,65 @@ def send_tele(msg, show_balance_btn=False):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     if show_balance_btn:
-        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Total Balance", "callback_data": "get_balance"}]]}
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Balance", "callback_data": "get_balance"}]]}
     try:
         with httpx.Client() as client: client.post(url, json=payload)
     except: pass
 
 def check_market_logic(m, client):
-    global CURRENT_BALANCE, TOTAL_PROFIT, ACTIVE_TRADES
+    global ACTIVE_TRADES
     try:
-        # Gamma API မှ အခြေခံဈေးနှုန်းကို အရင်စစ်သည် (API ဝန်သက်သာစေရန်)
+        # အဓိက ပြင်ဆင်ချက်: CLOB အစား Gamma မှ Live Price ကို တိုက်ရိုက်သုံးခြင်း
         raw_prices = m.get('outcomePrices', [])
         if len(raw_prices) < 2: return
         
-        # အဆင့် (၁): ကိုက်ညီနိုင်ခြေရှိသော ပွဲများကိုသာ CLOB စစ်မည်
+        a_p = float(raw_prices[0])
+        b_p = float(raw_prices[1])
+        current_sum = a_p + b_p
+
         question = m.get('question', 'Unknown Event')
-        tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
-        if not tokens or len(tokens) < 2: return
-        
-        market_id = m.get('conditionId') or m.get('condition_id')
+        market_id = m.get('conditionId')
+
+        # Log ထုတ်ခြင်း (Railway တွင် ဈေးနှုန်းများကို ချက်ချင်းမြင်ရမည်)
+        if current_sum > 0:
+            print(f"RN1 Live-Track | {question[:25]}.. | Sum: {current_sum:.3f}")
 
         if market_id not in ACTIVE_TRADES:
-            # API Rate Limit မမိစေရန် Delay အနည်းငယ်စီ ထည့်ထားသည်
-            time.sleep(random.uniform(0.3, 0.8)) 
-            
-            a_res = client.get(f"https://clob.polymarket.com/price?token_id={tokens[0]}&side=BUY").json()
-            b_res = client.get(f"https://clob.polymarket.com/price?token_id={tokens[1]}&side=BUY").json()
-            
-            a_p, b_p = float(a_res.get('price', 0)), float(b_res.get('price', 0))
-            current_sum = a_p + b_p
-
-            # ဈေးနှုန်းရှိလျှင် Log တွင် ပြမည် (ဒါတက်လာမှ Bot အသက်ဝင်ခြင်းဖြစ်သည်)
-            if current_sum > 0:
-                print(f"RN1 Sharp-Scan | {question[:20]}.. | Sum: {current_sum:.3f}")
-
-            # Entry Logic (ချဲ့ထားသော Range ဖြင့် စစ်ဆေးခြင်း)
+            # Entry Range စစ်ဆေးခြင်း
             if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX and current_sum > 0:
-                ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
-                send_tele(f"🚀 *ENTRY EXECUTED*\n📌 {question}\n📊 Sum: `{current_sum:.3f}`", True)
-
+                with balance_lock:
+                    ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
+                
+                # Telegram သို့ အသေးစိတ်ဈေးနှုန်းဖြင့် ပို့ပေးခြင်း
+                entry_msg = (
+                    f"🚀 *ENTRY EXECUTED*\n📌 {question}\n"
+                    f"----------------------------\n"
+                    f"🔹 Side A: `${a_p:.3f}`\n"
+                    f"🔸 Side B: `${b_p:.3f}`\n"
+                    f"📊 Total Sum: `${current_sum:.3f}`"
+                )
+                send_tele(entry_msg, True)
     except: pass
 
-def run_v35_engine():
-    # V19 ၏ Log Format အတိုင်း
-    print(f"RN1 V35 | SHARP SCANNER | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v36_engine():
+    # V19 ၏ Log Format မူရင်းအတိုင်း
+    print(f"RN1 V36 | INSTANT ENTRY | {datetime.datetime.now().strftime('%H:%M:%S')}")
     all_markets = []
     
     try:
         with httpx.Client(http2=True, headers=HEADERS, timeout=60.0) as client:
+            # ပွဲစဉ် ၁၀၀၀ လုံး မိစေရန်
             for offset in range(0, 1000, 100):
                 api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
                 res = client.get(api_url)
                 if res.status_code == 200:
                     all_markets.extend(res.json())
-                time.sleep(0.5) 
+                time.sleep(0.2)
             
             print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
             
             if all_markets:
-                # API ငြိမ်စေရန် Thread ကို ၁၅ ခုသာ ထားထားသည်
-                with ThreadPoolExecutor(max_workers=15) as executor:
+                with ThreadPoolExecutor(max_workers=30) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m, client)
                         
@@ -104,7 +104,7 @@ def run_v35_engine():
         print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V35: Sharp Scanner (Ultra Range) Online!*", True)
+    send_tele("🚀 *RN1 V36: Instant Entry Engine Online!*", True)
     while True:
-        run_v35_engine()
+        run_v36_engine()
         time.sleep(random.randint(45, 75))
