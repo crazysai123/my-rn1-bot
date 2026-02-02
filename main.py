@@ -18,7 +18,7 @@ PEAK_BALANCE = 100.0
 DRAWDOWN_LIMIT = 0.5    
 TRADE_SIZE = 10.0       
 GAS_BUFFER = 0.01       
-MIN_EXIT_PROFIT = 0.02  # $1.02 ကျော်မှ အမြတ်ယူရန်
+MIN_EXIT_PROFIT = 0.02  
 
 # --- Trackers ---
 ACTIVE_TRADES = {} 
@@ -62,7 +62,7 @@ def check_spread_strategy(market):
     global CURRENT_BALANCE, TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY, ACTIVE_TRADES
     try:
         question = market.get('question', '')
-        # Sports Filter ကို ပိုကျယ်ပြန့်အောင် ပြင်ဆင်ခြင်း
+        # Sports Filter ကို ပိုကျယ်ပြန့်အောင် လုပ်ထားသည်
         is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'cup', 'league', 'at', 'tournament'])
         if not is_sports: return
 
@@ -70,7 +70,7 @@ def check_spread_strategy(market):
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ၁။ Entry Check: ဈေးနှုန်းမှန်ကန်စွာ ဆွဲယူခြင်း
+        # ၁။ Entry Check: ဈေးနှုန်းမှန်ကန်စွာ ရရှိမှသာ Entry ဝင်မည်
         if market_id not in ACTIVE_TRADES:
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
@@ -78,20 +78,19 @@ def check_spread_strategy(market):
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
-            # ဈေးနှုန်း 0.00 မဟုတ်မှသာ Entry ဝင်မည်
-            if y_p <= 0.01 or n_p <= 0.01: return
-
-            ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
-            
-            entry_msg = (
-                f"🏟️ *NEW ENTRY (SPORTS)*\n"
-                f"📌 {question}\n"
-                f"----------------------------\n"
-                f"🟢 Yes Entry: `${y_p:.3f}`\n"
-                f"🔴 No Entry: `${n_p:.3f}`\n"
-                f"💵 Total Capital: `$1.000`"
-            )
-            send_tele(entry_msg)
+            # ဈေးနှုန်း 0.01 ထက်များမှသာ Entry Message ပို့ပြီး စာရင်းသွင်းမည်
+            if y_p > 0.01 and n_p > 0.01:
+                ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
+                
+                entry_msg = (
+                    f"🏟️ *NEW ENTRY (SPORTS)*\n"
+                    f"📌 {question}\n"
+                    f"----------------------------\n"
+                    f"🟢 Yes Entry: `${y_p:.3f}`\n"
+                    f"🔴 No Entry: `${n_p:.3f}`\n"
+                    f"💵 Total Capital: `$1.000`"
+                )
+                send_tele(entry_msg)
             return
 
         # ၂။ Exit Check: Targeted Profit Message (Entry/Exit ဈေးနှုန်းများယှဉ်ပြရန်)
@@ -112,7 +111,7 @@ def check_spread_strategy(market):
                 TOTAL_TRADES_TODAY += 1
                 TOTAL_PROFIT_TODAY += net_profit
                 
-                # Targeted Profit Message
+                # အသေးစိတ် Profit Message
                 exit_msg = (
                     f"💰 *PROFIT CAPTURED (1.0+)*\n"
                     f"📌 {question}\n"
@@ -130,7 +129,7 @@ def check_spread_strategy(market):
 
 def run_scanner():
     send_daily_report()
-    # Active ပွဲအရေအတွက်ကို Log မှာပြရန်
+    # Active ပွဲအရေအတွက်ကို Railway Log မှာပြရန်
     print(f"RN1 Scan | Bal: ${CURRENT_BALANCE:.2f} | Active Trades: {len(ACTIVE_TRADES)}")
     try:
         res = session.get("https://clob.polymarket.com/markets?active=true&limit=1000", timeout=10).json()
@@ -143,7 +142,7 @@ def run_scanner():
         print(f"Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🎯 *RN1 Professional Sports Bot Online!*")
+    send_tele("🎯 *RN1 Pro Sports Bot Online!*")
     while True:
         run_scanner()
         time.sleep(5)
