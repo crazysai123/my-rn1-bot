@@ -62,23 +62,25 @@ def check_spread_strategy(market):
     global CURRENT_BALANCE, TOTAL_TRADES_TODAY, TOTAL_PROFIT_TODAY, ACTIVE_TRADES
     try:
         question = market.get('question', '')
-        is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'cup', 'league'])
+        # Sports Filter ကို ပိုကျယ်ပြန့်အောင် ပြင်ဆင်ခြင်း
+        is_sports = any(word in question.lower() for word in ['vs', 'win', 'match', 'game', 'cup', 'league', 'at', 'tournament'])
         if not is_sports: return
 
         market_id = market.get('condition_id')
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ၁။ Entry Check: ဝယ်ဈေးကို သိမ်းဆည်းခြင်း
+        # ၁။ Entry Check: ဈေးနှုန်းမှန်ကန်စွာ ဆွဲယူခြင်း
         if market_id not in ACTIVE_TRADES:
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
+            
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
-            if y_p <= 0 or n_p <= 0: return
+            # ဈေးနှုန်း 0.00 မဟုတ်မှသာ Entry ဝင်မည်
+            if y_p <= 0.01 or n_p <= 0.01: return
 
-            # Entry ဈေးနှုန်းများကို မှတ်သားထားခြင်း
             ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
             
             entry_msg = (
@@ -87,25 +89,22 @@ def check_spread_strategy(market):
                 f"----------------------------\n"
                 f"🟢 Yes Entry: `${y_p:.3f}`\n"
                 f"🔴 No Entry: `${n_p:.3f}`\n"
-                f"💵 Capital: `$1.000`"
+                f"💵 Total Capital: `$1.000`"
             )
             send_tele(entry_msg)
             return
 
-        # ၂။ Exit Check: $1.02 ကျော်ပါက အမြတ်ယူပြီး အသေးစိတ်ပြသခြင်း
+        # ၂။ Exit Check: Targeted Profit Message (Entry/Exit ဈေးနှုန်းများယှဉ်ပြရန်)
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=3).json()
+        
         y_bid = float(y_res.get('price', 0))
         n_bid = float(n_res.get('price', 0))
         current_exit_sum = y_bid + n_bid
 
         if current_exit_sum > (1.0 + MIN_EXIT_PROFIT):
             net_profit = (TRADE_SIZE * current_exit_sum) - TRADE_SIZE - GAS_BUFFER
-            
-            # မူလဝယ်ဈေးများကို ပြန်ထုတ်ယူခြင်း
             entry_data = ACTIVE_TRADES.get(market_id)
-            y_e = entry_data['y_entry']
-            n_e = entry_data['n_entry']
 
             with balance_lock:
                 check_risk_management()
@@ -113,13 +112,13 @@ def check_spread_strategy(market):
                 TOTAL_TRADES_TODAY += 1
                 TOTAL_PROFIT_TODAY += net_profit
                 
-                # အသေးစိတ် Targeted Profit Message
+                # Targeted Profit Message
                 exit_msg = (
                     f"💰 *PROFIT CAPTURED (1.0+)*\n"
                     f"📌 {question}\n"
                     f"----------------------------\n"
-                    f"📥 *Entry:* Y: `${y_e:.3f}` | N: `${n_e:.3f}`\n"
-                    f"📤 *Exit:* Y: `${y_bid:.3f}` | N: `${n_bid:.3f}`\n"
+                    f"📥 *Entry:* Y: `${entry_data['y_entry']:.2f}` | N: `${entry_data['n_entry']:.2f}`\n"
+                    f"📤 *Exit:* Y: `${y_bid:.2f}` | N: `${n_bid:.2f}`\n"
                     f"📈 Total Sum: `${current_exit_sum:.3f}`\n"
                     f"----------------------------\n"
                     f"💵 Net Profit: `+${net_profit:.4f}`\n"
@@ -131,7 +130,8 @@ def check_spread_strategy(market):
 
 def run_scanner():
     send_daily_report()
-    print(f"RN1 Scan | Bal: ${CURRENT_BALANCE:.2f} | Active: {len(ACTIVE_TRADES)}")
+    # Active ပွဲအရေအတွက်ကို Log မှာပြရန်
+    print(f"RN1 Scan | Bal: ${CURRENT_BALANCE:.2f} | Active Trades: {len(ACTIVE_TRADES)}")
     try:
         res = session.get("https://clob.polymarket.com/markets?active=true&limit=1000", timeout=10).json()
         markets = res if isinstance(res, list) else res.get('data', [])
