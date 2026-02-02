@@ -15,10 +15,16 @@ CURRENT_BALANCE = 1000.0
 TRADE_SIZE = 20.0
 MIN_EXIT_PROFIT = 0.02
 
-ACTIVE_TRADES = {}
-balance_lock = threading.Lock()
+# --- Proxy Configuration (သင်ပေးထားသော အချက်အလက်များ) ---
+# Username: onzoyyph | Password: hed0nyhkyw59 | IP: 198.105.121.200
+PROXY_URL = "http://onzoyyph:hed0nyhkyw59@198.105.121.200:80"
 
-# Cloudflare wall ကို ကျော်ဖြတ်ရန် Scraper တည်ဆောက်ခြင်း
+proxies = {
+    "http": PROXY_URL,
+    "https": PROXY_URL
+}
+
+# Cloudflare wall ကို Proxy သုံးပြီး ကျော်ဖြတ်ရန်
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
 )
@@ -30,54 +36,49 @@ def send_tele(msg):
     except: pass
 
 def check_market(market):
-    global CURRENT_BALANCE, ACTIVE_TRADES
+    global CURRENT_BALANCE
     try:
-        question = market.get('group_name', 'Unknown Event') # Event name ကို ယူခြင်း
-        market_id = market.get('conditionId')
+        question = market.get('group_name', 'Live Event')
         tokens = market.get('clobTokenIds', [])
-        
         if not tokens or len(tokens) < 2: return
-        
-        # ပွဲဟောင်းများစစ်ထုတ်ခြင်း
-        if any(year in question for year in ["2022", "2023", "2024"]): return
 
-        if market_id not in ACTIVE_TRADES:
-            # Live Price ဆွဲယူခြင်း
-            y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[0]}&side=BUY", timeout=10).json()
-            n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[1]}&side=BUY", timeout=10).json()
-            
-            y_p = float(y_res.get('price', 0))
-            n_p = float(n_res.get('price', 0))
-            
-            if y_p > 0.01 and n_p > 0.01:
-                ACTIVE_TRADES[market_id] = {'y': y_p, 'n': n_p}
-                send_tele(f"🚀 *BYPASS ENTRY*\n📌 {question}\n🟢 Yes: `${y_p}` | 🔴 No: `${n_p}`")
+        # Proxy သုံးပြီး Polymarket ဈေးနှုန်းများကို တိုက်ရိုက်ယူခြင်း
+        y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[0]}&side=BUY", proxies=proxies, timeout=10).json()
+        n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[1]}&side=BUY", proxies=proxies, timeout=10).json()
+        
+        y_p, n_p = float(y_res.get('price', 0)), float(n_res.get('price', 0))
+        
+        if y_p > 0.01 and n_p > 0.01:
+            send_tele(f"✅ *PROXY DATA ACTIVE*\n📌 {question}\n🟢 Yes: `${y_p}` | 🔴 No: `${n_p}`")
     except: pass
 
 def run_scanner():
-    print(f"RN1 Scan | Bal: ${CURRENT_BALANCE} | Time: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    # Proxy အလုပ်လုပ်ပုံကို စစ်ဆေးရန်
     try:
-        # နည်းလမ်း (၂) - ပိုမိုရိုးရှင်းသော Events Endpoint
-        gamma_url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=20"
-        response = scraper.get(gamma_url, timeout=20)
-        
-        if response.status_code != 200:
-            print(f"⚠️ Error: Status Code {response.status_code} (Blocked by Polymarket)")
-            return
+        ip_check = scraper.get("https://api.ipify.org", proxies=proxies, timeout=10).text
+        print(f"RN1 Scan | Active IP: {ip_check} | Bal: ${CURRENT_BALANCE}")
+    except:
+        print("❌ Proxy Connection Failed! Please check your WebShare credentials.")
+        return
 
-        events = response.json()
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            for event in events:
-                for market in event.get('markets', []):
-                    executor.submit(check_market, market)
-                    
-        print(f"RN1 Scan | Active Trades: {len(ACTIVE_TRADES)}")
+    try:
+        # Events Endpoint ကို Proxy ဖြင့် ခေါ်ယူခြင်း
+        gamma_url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=15"
+        res = scraper.get(gamma_url, proxies=proxies, timeout=20)
         
+        if res.status_code == 200:
+            events = res.json()
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for event in events:
+                    for market in event.get('markets', []):
+                        executor.submit(check_market, market)
+        else:
+            print(f"⚠️ Status Code: {res.status_code} - Blocked even with Proxy.")
     except Exception as e:
-        print(f"Connection Error: {e}")
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🛡️ *RN1 V6: Cloudflare Bypass Mode Started!*")
+    send_tele("🛡️ *RN1 V7: WebShare Proxy Mode Online!*")
     while True:
         run_scanner()
         time.sleep(30)
