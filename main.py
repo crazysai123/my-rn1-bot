@@ -8,13 +8,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# --- Configurations ---
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # --- Strategy & Risk Logic ---
-# သင်အလိုရှိသည့်အတိုင်း $1000 Capital နှင့် $20 Trade Size
-CURRENT_BALANCE = 1000.0 
-TRADE_SIZE = 20.0       
+CURRENT_BALANCE = 1000.0  # သင်အလိုရှိသော $1000 Capital
+TRADE_SIZE = 20.0        # $20 per side
 GAS_BUFFER = 0.01       
 MIN_EXIT_PROFIT = 0.02  
 
@@ -31,41 +31,41 @@ def send_tele(msg):
 def check_spread_strategy(market):
     global CURRENT_BALANCE, ACTIVE_TRADES
     try:
-        # Gamma API Field များအရ တိကျစွာဖတ်ယူခြင်း
         question = market.get('question', '')
         market_id = market.get('conditionId')
         
-        # ဈေးနှုန်းရှိနိုင်သော Token ID များကို ရယူခြင်း
+        # ၂၀၂၃၊ ၂၀၂၄ ပွဲစဉ်ဟောင်းများကို ကျော်ရန်
+        if any(year in question for year in ["2022", "2023", "2024"]):
+            return
+
         tokens = market.get('clobTokenIds', [])
         if not tokens or len(tokens) < 2: return
         
         y_id, n_id = tokens[0], tokens[1]
         
-        # ၁။ Entry Check: Midpoint Price ကို စစ်ဆေးခြင်း
+        # ၁။ Entry Check: Live ဈေးနှုန်းရှိမှသာ Entry ဝင်မည်
         if market_id not in ACTIVE_TRADES:
-            # BUY side ဈေးနှုန်းကို တိုက်ရိုက်ခေါ်ယူသည်
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=10).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=10).json()
             
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
-            # ဈေးနှုန်းအမှန်တကယ်ရှိပြီး ၂၀၂၃ ပွဲမဟုတ်မှသာ Entry ဝင်မည်
-            if y_p > 0.01 and n_p > 0.01 and "2023" not in question:
-                ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p, 'q': question}
+            if y_p > 0.005 and n_p > 0.005: # $0.00 ပွဲများကို တားဆီးရန်
+                ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
                 
                 entry_msg = (
-                    f"🎯 *LIVE ORDERBOOK ENTRY*\n"
+                    f"🏟️ *LIVE MARKET DETECTED (EU Region)*\n"
                     f"📌 {question}\n"
                     f"----------------------------\n"
                     f"🟢 Yes Entry: `${y_p:.3f}`\n"
                     f"🔴 No Entry: `${n_p:.3f}`\n"
-                    f"💵 Size: `${TRADE_SIZE}` | Bal: `${CURRENT_BALANCE}`"
+                    f"💵 Size: `${TRADE_SIZE}` | Capital: `${CURRENT_BALANCE}`"
                 )
                 send_tele(entry_msg)
                 return
 
-        # ၂။ Exit Check: Profit တွက်ချက်ခြင်း
+        # ၂။ Exit Check: Profit Tracking
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=10).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=10).json()
         y_bid, n_bid = float(y_res.get('price', 0)), float(n_res.get('price', 0))
@@ -77,8 +77,6 @@ def check_spread_strategy(market):
                 exit_msg = (
                     f"💰 *PROFIT TAKEN*\n"
                     f"📌 {question}\n"
-                    f"📥 Entry Sum: `${ACTIVE_TRADES[market_id]['y_entry'] + ACTIVE_TRADES[market_id]['n_entry']:.3f}`\n"
-                    f"📤 Exit Sum: `${y_bid + n_bid:.3f}`\n"
                     f"💵 Net: `+${net_profit:.4f}` | Bal: `{CURRENT_BALANCE:.2f}`"
                 )
                 send_tele(exit_msg)
@@ -86,24 +84,22 @@ def check_spread_strategy(market):
     except: pass
 
 def run_scanner():
-    # Log တွင် အခြေအနေပြရန်
+    # Logs တွင် အခြေအနေပြရန်
     print(f"RN1 Scan | Bal: ${CURRENT_BALANCE:.2f} | Active: {len(ACTIVE_TRADES)} | {datetime.datetime.now().strftime('%H:%M:%S')}")
     try:
-        # ဈေးနှုန်းအစစ်အမှန်ရှိသော Markets များကိုသာ Gamma API မှ ဆွဲယူခြင်း
-        # Active=true နှင့် closed=false ကို သေချာပေါက် သုံးထားသည်
-        gamma_url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume24hr"
+        # Gamma API မှ တဆင့် ဈေးနှုန်းရှိသောပွဲများကို ဆွဲယူခြင်း
+        gamma_url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100"
         res = session.get(gamma_url, timeout=20).json()
         
-        # Volume အများဆုံးပွဲများကို ဦးစားပေး ရှာဖွေမည်
         with ThreadPoolExecutor(max_workers=10) as executor:
             for m in res:
-                if m.get('clobTokenIds') and len(m.get('clobTokenIds')) >= 2:
+                if m.get('clobTokenIds'):
                     executor.submit(check_spread_strategy, m)
     except Exception as e:
         print(f"Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("⚡ *RN1 V4: Orderbook Engine Started!*")
+    send_tele("⚡ *RN1 Region-Bypass Engine Online!*")
     while True:
         run_scanner()
-        time.sleep(20) # API Limit မမိစေရန် အချိန်ပိုပေးထားသည်
+        time.sleep(15)
