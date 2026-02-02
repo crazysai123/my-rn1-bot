@@ -8,28 +8,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Configurations ---
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CURRENT_BALANCE = 1000.0 
-TRADE_SIZE = 20.0       
-GAS_BUFFER = 0.01       
-MIN_EXIT_PROFIT = 0.02  
+CURRENT_BALANCE = 1000.0
+TRADE_SIZE = 20.0
 
-ACTIVE_TRADES = {} 
-balance_lock = threading.Lock()
-
-# --- WebShare Proxy Configuration ---
+# --- WebShare Proxy (Current) ---
 PROXY_URL = "http://onzoyyph:hed0nyhkyw59@198.105.121.200:6462"
-proxies = {
-    "http": PROXY_URL,
-    "https": PROXY_URL
-}
+proxies = {"http": PROXY_URL, "https": PROXY_URL}
 
-# Cloudflare Bypass အတွက် Scraper တည်ဆောက်ခြင်း
-scraper = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
-)
+scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
 
 def send_tele(msg):
     if not TELE_TOKEN: return
@@ -37,77 +25,58 @@ def send_tele(msg):
     try: scraper.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
-def check_spread_strategy(market):
-    global CURRENT_BALANCE, ACTIVE_TRADES
+def check_market(market):
     try:
-        question = market.get('question', '')
-        market_id = market.get('conditionId')
+        # Question field name က endpoint အပေါ်မူတည်ပြီး ကွဲနိုင်လို့ နှစ်မျိုးလုံးစစ်သည်
+        question = market.get('question') or market.get('group_name') or "Live Event"
         tokens = market.get('clobTokenIds', [])
-        
         if not tokens or len(tokens) < 2: return
-        y_id, n_id = tokens[0], tokens[1]
+
+        # Live Price Check
+        y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[0]}&side=BUY", proxies=proxies, timeout=10).json()
+        n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[1]}&side=BUY", proxies=proxies, timeout=10).json()
         
-        # ၁။ Entry Check
-        if market_id not in ACTIVE_TRADES:
-            # Proxy သုံး၍ ဈေးနှုန်းခေါ်ယူခြင်း
-            y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", proxies=proxies, timeout=10).json()
-            n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", proxies=proxies, timeout=10).json()
-            
-            y_p = float(y_res.get('price', 0))
-            n_p = float(n_res.get('price', 0))
-            
-            if y_p > 0.01 and n_p > 0.01 and "2023" not in question:
-                ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p, 'q': question}
-                entry_msg = (
-                    f"🎯 *LIVE ORDERBOOK ENTRY*\n📌 {question}\n"
-                    f"----------------------------\n"
-                    f"🟢 Yes Entry: `${y_p:.3f}`\n🔴 No Entry: `${n_p:.3f}`\n"
-                    f"💵 Size: `${TRADE_SIZE}` | Bal: `${CURRENT_BALANCE}`"
-                )
-                send_tele(entry_msg)
-                return
-
-        # ၂။ Exit Check
-        y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", proxies=proxies, timeout=10).json()
-        n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", proxies=proxies, timeout=10).json()
-        y_bid, n_bid = float(y_res.get('price', 0)), float(n_res.get('price', 0))
-
-        if (y_bid + n_bid) > (1.0 + MIN_EXIT_PROFIT):
-            net_profit = (TRADE_SIZE * (y_bid + n_bid)) - (TRADE_SIZE * 2) - GAS_BUFFER
-            with balance_lock:
-                CURRENT_BALANCE += net_profit
-                exit_msg = (
-                    f"💰 *PROFIT TAKEN*\n📌 {question}\n"
-                    f"📥 Entry Sum: `${ACTIVE_TRADES[market_id]['y_entry'] + ACTIVE_TRADES[market_id]['n_entry']:.3f}`\n"
-                    f"📤 Exit Sum: `${y_bid + n_bid:.3f}`\n"
-                    f"💵 Net: `+${net_profit:.4f}` | Bal: `{CURRENT_BALANCE:.2f}`"
-                )
-                send_tele(exit_msg)
-                del ACTIVE_TRADES[market_id]
-    except: pass
+        y_p, n_p = float(y_res.get('price', 0)), float(n_res.get('price', 0))
+        
+        if y_p > 0.01 and n_p > 0.01:
+            send_tele(f"✅ *DATA FOUND*\n📌 {question}\n🟢 Yes: `${y_p}` | 🔴 No: `${n_p}`")
+            return True
+    except: return False
 
 def run_scanner():
-    # Proxy IP အလုပ်လုပ်ပုံကို စစ်ဆေးခြင်း
-    try:
-        ip_check = scraper.get("https://api.ipify.org", proxies=proxies, timeout=10).text
-        print(f"RN1 Scan | IP: {ip_check} | Bal: ${CURRENT_BALANCE:.2f} | Active: {len(ACTIVE_TRADES)}")
-    except:
-        print("❌ Proxy Connection Error!")
-        return
+    print(f"RN1 Scan | IP: 198.105.121.200 | Time: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    found_count = 0
+    
+    # Endpoint (၃) ခုလုံးကို တစ်လှည့်စီ စမ်းသပ်ခြင်း
+    endpoints = [
+        "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=20",
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20",
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20&order=volume24hr"
+    ]
+    
+    for url in endpoints:
+        try:
+            res = scraper.get(url, proxies=proxies, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                # Endpoint က /events ဆိုရင် list ထဲကနေ market ကို ထပ်ထုတ်ရသည်
+                markets = []
+                if "events" in url:
+                    for e in data: markets.extend(e.get('markets', []))
+                else:
+                    markets = data
+                
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    results = list(executor.map(check_market, markets))
+                    found_count += sum(1 for r in results if r)
+            else:
+                print(f"⚠️ Endpoint {url.split('/')[-1].split('?')[0]} blocked (Status: {res.status_code})")
+        except: continue
 
-    try:
-        gamma_url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=50&order=volume24hr"
-        res = scraper.get(gamma_url, proxies=proxies, timeout=20).json()
-        
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            for m in res:
-                if m.get('clobTokenIds'):
-                    executor.submit(check_spread_strategy, m)
-    except Exception as e:
-        print(f"Scanner Error: {e}")
+    print(f"RN1 Scan | Active Trades Found: {found_count}")
 
 if __name__ == "__main__":
-    send_tele("⚡ *RN1 V4: Proxy-Enabled Engine Online!*")
+    send_tele("🛠️ *RN1 V8: Ultra-Scan Mode Online!*")
     while True:
         run_scanner()
-        time.sleep(20)
+        time.sleep(30)
