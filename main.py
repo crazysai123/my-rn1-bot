@@ -13,14 +13,14 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Logic ---
+# --- Strategy Settings ---
 CURRENT_BALANCE = 1000.0 
 TOTAL_PROFIT = 0.0
 TRADE_SIZE = 20.0       
 GAS_BUFFER = 0.01       
 EXIT_THRESHOLD = 1.02  
 
-# Entry Range (0.95 - 1.10)
+# အခြေအနေ စမ်းသပ်ရန် Range ကို ကျယ်ကျယ်ထားဆဲဖြစ်သည်
 ENTRY_RANGE_MIN = 0.95
 ENTRY_RANGE_MAX = 1.10
 
@@ -38,7 +38,7 @@ def send_tele(msg, show_balance_btn=False):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     if show_balance_btn:
-        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Total Balance", "callback_data": "get_balance"}]]}
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Balance", "callback_data": "get_balance"}]]}
     try:
         with httpx.Client() as client: client.post(url, json=payload)
     except: pass
@@ -46,7 +46,16 @@ def send_tele(msg, show_balance_btn=False):
 def check_market_logic(m, client):
     global CURRENT_BALANCE, TOTAL_PROFIT, ACTIVE_TRADES
     try:
-        question = m.get('question', 'Unknown Event')
+        # Gamma API မှ ရသော အခြေခံဈေးနှုန်းကို အရင်စစ်ဆေးခြင်း (API Call သက်သာစေရန်)
+        # Gamma API တွင် ဈေးနှုန်းမပါလျှင် CLOB ကို ဆက်မစစ်ဘဲ ကျော်မည်
+        a_raw = m.get('outcomePrices', [0, 0])[0]
+        b_raw = m.get('outcomePrices', [0, 0])[1]
+        
+        # အကြမ်းဖျင်း ပေါင်းလဒ်ကို အရင်ကြည့်သည်
+        if not (0.90 <= (float(a_raw) + float(b_raw)) <= 1.15):
+            return
+
+        question = m.get('question', 'Unknown')
         tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
         if not tokens or len(tokens) < 2: return
         
@@ -54,42 +63,28 @@ def check_market_logic(m, client):
         a_id, b_id = tokens[0], tokens[1]
 
         if market_id not in ACTIVE_TRADES:
-            # Live Price Fetching
+            # တကယ့် Buy Price ကို တောင်းယူခြင်း (တစ်စက္ကန့်လျှင် API Call အကန့်အသတ်ရှိသဖြင့် delay ထည့်ထားသည်)
+            time.sleep(random.uniform(0.1, 0.5)) 
             a_res = client.get(f"https://clob.polymarket.com/price?token_id={a_id}&side=BUY").json()
             b_res = client.get(f"https://clob.polymarket.com/price?token_id={b_id}&side=BUY").json()
             
-            a_p = float(a_res.get('price', 0))
-            b_p = float(b_res.get('price', 0))
+            a_p, b_p = float(a_res.get('price', 0)), float(b_res.get('price', 0))
             current_sum = a_p + b_p
 
-            # --- DEBUG LOG (မူရင်း Log ထဲသို့ ထည့်သွင်းခြင်း) ---
-            # ဈေးနှုန်းရှိသော ပွဲတိုင်းကို Railway Log တွင် ပြသပါမည်
-            if current_sum > 0:
-                short_q = (question[:25] + '..') if len(question) > 25 else question
-                print(f"DEBUG | {short_q} | Sum: {current_sum:.3f}")
+            # Log တွင် အမြဲပြနေစေရန်
+            print(f"RN1 Check | {question[:20]}.. | Sum: {current_sum:.3f}")
 
-            # Entry Logic
-            if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX:
-                ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
+            if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX and current_sum > 0:
+                with balance_lock:
+                    ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
                 send_tele(f"🚀 *ENTRY EXECUTED*\n📌 {question}\n📊 Sum: `{current_sum:.3f}`", True)
 
-        elif market_id in ACTIVE_TRADES:
-            a_res = client.get(f"https://clob.polymarket.com/price?token_id={a_id}&side=SELL").json()
-            b_res = client.get(f"https://clob.polymarket.com/price?token_id={b_id}&side=SELL").json()
-            total_exit_sum = float(a_res.get('price', 0)) + float(b_res.get('price', 0))
+    except Exception as e:
+        pass # Silent error for cleaner logs
 
-            if total_exit_sum >= EXIT_THRESHOLD:
-                net_profit = (TRADE_SIZE * total_exit_sum) - (TRADE_SIZE * 2) - GAS_BUFFER
-                with balance_lock:
-                    CURRENT_BALANCE += net_profit
-                    TOTAL_PROFIT += net_profit
-                    send_tele(f"💰 *PROFIT EXIT*\n📌 {question}\n📈 Net: `+${net_profit:.4f}`", True)
-                    del ACTIVE_TRADES[market_id]
-    except: pass
-
-def run_v33_engine():
-    # V19 ၏ မူရင်း Log Header
-    print(f"RN1 V33 | GIANT SCAN (1000) | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v34_engine():
+    # V19 ၏ Log Format မူရင်းအတိုင်း
+    print(f"RN1 V34 | SMART SCANNER | {datetime.datetime.now().strftime('%H:%M:%S')}")
     all_markets = []
     
     try:
@@ -99,13 +94,14 @@ def run_v33_engine():
                 res = client.get(api_url)
                 if res.status_code == 200:
                     all_markets.extend(res.json())
-                time.sleep(0.5) 
+                time.sleep(0.5)
             
-            # မူရင်း Active Responses Log
+            # Screenshot အတိုင်း Active Response အရေအတွက်ပြခြင်း
             print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
             
             if all_markets:
-                with ThreadPoolExecutor(max_workers=50) as executor:
+                # API ဝန်မပိစေရန် Thread ပမာဏကို ပြန်လျှော့ထားသည်
+                with ThreadPoolExecutor(max_workers=15) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m, client)
                         
@@ -113,7 +109,7 @@ def run_v33_engine():
         print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V33: Logger Active (1000 Events) Online!*", True)
+    send_tele("🚀 *RN1 V34: Smart Scanner Online!*", True)
     while True:
-        run_v33_engine()
-        time.sleep(random.randint(60, 90))
+        run_v34_engine()
+        time.sleep(random.randint(45, 75))
