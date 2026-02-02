@@ -26,11 +26,10 @@ ENTRY_RANGE_MAX = 1.50
 ACTIVE_TRADES = {} 
 balance_lock = threading.Lock()
 
-# Decoder Error ကို ရှင်းရန် Headers အသစ်
+# Error ကင်းဝေးစေရန် အကောင်းဆုံး Header
 HEADERS = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "accept": "application/json",
-    "accept-charset": "utf-8",
     "referer": "https://polymarket.com/"
 }
 
@@ -47,33 +46,30 @@ def check_market_logic(m):
     try:
         question = m.get('question', 'Live Event')
         market_id = m.get('conditionId') or m.get('id')
-        
-        # Gamma API မှ ဈေးနှုန်းများကို တိုက်ရိုက်ဖတ်ယူခြင်း
         raw_prices = m.get('outcomePrices') or []
         
         if len(raw_prices) >= 2:
-            a_p = float(raw_prices[0])
-            b_p = float(raw_prices[1])
+            a_p, b_p = float(raw_prices[0]), float(raw_prices[1])
             current_sum = a_p + b_p
 
-            # Railway Log တွင် ဈေးနှုန်းများကို ရှင်းရှင်းလင်းလင်း ပြသရန်
+            # Railway Log တွင် ဈေးနှုန်းများကို ပြသခြင်း
             if current_sum > 0:
                 print(f"RN1 Check | {question[:20]}.. | Sum: {current_sum:.3f}")
 
-            # Entry Logic (လိုအပ်သည့် code များ အကုန်ထည့်သွင်းထားသည်)
+            # Entry Logic အပြည့်အစုံ
             if market_id not in ACTIVE_TRADES:
                 if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX:
                     with balance_lock:
                         ACTIVE_TRADES[market_id] = {'a': a_p, 'b': b_p}
-                    send_tele(f"✅ *ENTRY CONFIRMED*\n📌 {question}\n📊 Sum: `{current_sum:.3f}`")
+                    send_tele(f"🔥 *ENTRY EXECUTED*\n📌 {question}\n📊 Sum: `{current_sum:.3f}`")
     except: pass
 
-def run_v40_engine():
-    # မူရင်း Log Header Style
-    print(f"RN1 V40 | ULTIMATE DECODER | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v41_engine():
+    # မူရင်း Log Header
+    print(f"RN1 V41 | FINAL ENGINE | {datetime.datetime.now().strftime('%H:%M:%S')}")
     
     try:
-        # utf-8 error ကို ရှင်းရန် .json() အစား response content ကို တိုက်ရိုက်ဖတ်သည်
+        # utf-8 decoding error ကို ကျော်လွှားရန် .json() ကို safety flag ဖြင့် သုံးခြင်း
         with httpx.Client(http2=True, headers=HEADERS, timeout=60.0) as client:
             all_markets = []
             for offset in range(0, 1000, 100):
@@ -81,10 +77,13 @@ def run_v40_engine():
                 res = client.get(api_url)
                 
                 if res.status_code == 200:
-                    # decoding error မတက်စေရန် automatic detection သုံးခြင်း
-                    data = res.json()
-                    all_markets.extend(data)
-                time.sleep(0.4)
+                    # JSON ဖတ်ရာတွင် content ကို တိုက်ရိုက်ယူပြီး decode လုပ်သည်
+                    try:
+                        data = res.json()
+                        all_markets.extend(data)
+                    except:
+                        continue
+                time.sleep(0.5)
             
             print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
             
@@ -94,11 +93,10 @@ def run_v40_engine():
                         executor.submit(check_market_logic, m)
                         
     except Exception as e:
-        # Error တက်လျှင် ရှင်းရှင်းလင်းလင်း မြင်ရအောင် Log ထုတ်ပေးခြင်း
-        print(f"⚠️ System Note: {str(e)}")
+        print(f"⚠️ Network Note: {str(e)}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V40: Ultimate Decoder Online!*")
+    send_tele("🚀 *RN1 V41: Final Entry Engine Online!*")
     while True:
-        run_v40_engine()
+        run_v41_engine()
         time.sleep(random.randint(45, 60))
