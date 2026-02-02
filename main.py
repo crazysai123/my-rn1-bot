@@ -1,5 +1,3 @@
-
-
 import os
 import time
 import requests
@@ -42,7 +40,7 @@ def check_risk_management():
         PEAK_BALANCE = CURRENT_BALANCE
     allowed_floor = PEAK_BALANCE * (1 - DRAWDOWN_LIMIT)
     if CURRENT_BALANCE <= allowed_floor:
-        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak `${PEAK_BALANCE}`.")
+        send_tele(f"🛑 *DRAWDOWN ALERT*\nBalance `${CURRENT_BALANCE}` dropped 50% from Peak.")
         os._exit(1)
 
 def send_daily_report():
@@ -53,7 +51,7 @@ def send_daily_report():
             f"📅 *DAILY PERFORMANCE REPORT*\n"
             f"🎯 Total Profits Taken: `{TOTAL_TRADES_TODAY}`\n"
             f"💰 Daily Profit: `+${TOTAL_PROFIT_TODAY:.4f}`\n"
-            f"💳 Balance: `${CURRENT_BALANCE:.2f}`"
+            f"💳 Balance: `{CURRENT_BALANCE:.2f}`"
         )
         send_tele(report_msg)
         TOTAL_TRADES_TODAY = 0
@@ -72,14 +70,18 @@ def check_spread_strategy(market):
         y_id = market['tokens'][0]['token_id']
         n_id = market['tokens'][1]['token_id']
         
-        # ၁။ Entry Check: ပွဲသစ်တွေ့လျှင် $1.00 ဖြင့် Virtual Entry ဝင်မည်
+        # ၁။ Entry Check: $1.00 ဖြင့် Virtual Entry ဝင်ပြီး ဈေးနှုန်းမှတ်သားခြင်း
         if market_id not in ACTIVE_TRADES:
             y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=BUY", timeout=3).json()
             n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=BUY", timeout=3).json()
             y_p = float(y_res.get('price', 0))
             n_p = float(n_res.get('price', 0))
             
-            ACTIVE_TRADES[market_id] = {'y': y_p, 'n': n_p}
+            # ဈေးနှုန်းမရရှိပါက ကျော်သွားရန်
+            if y_p <= 0 or n_p <= 0: return
+
+            # Entry ဈေးနှုန်းများကို Tracker ထဲ ထည့်သွင်းခြင်း
+            ACTIVE_TRADES[market_id] = {'y_entry': y_p, 'n_entry': n_p}
             
             entry_msg = (
                 f"🏟️ *NEW ENTRY (SPORTS)*\n"
@@ -93,7 +95,7 @@ def check_spread_strategy(market):
             print(f"Entry Start: {question}")
             return
 
-        # ၂။ Exit Check: $1.02 ကျော်မကျော် စစ်ဆေးခြင်း
+        # ၂။ Exit Check: $1.02 ကျော်ပါက အမြတ်ယူခြင်း
         y_res = session.get(f"https://clob.polymarket.com/price?token_id={y_id}&side=SELL", timeout=3).json()
         n_res = session.get(f"https://clob.polymarket.com/price?token_id={n_id}&side=SELL", timeout=3).json()
         y_bid = float(y_res.get('price', 0))
@@ -102,18 +104,29 @@ def check_spread_strategy(market):
 
         if current_exit_sum > (1.0 + MIN_EXIT_PROFIT):
             net_profit = (TRADE_SIZE * current_exit_sum) - TRADE_SIZE - GAS_BUFFER
+            
+            # မူလ Entry ဈေးနှုန်းများကို ပြန်ထုတ်ခြင်း
+            entry_data = ACTIVE_TRADES.get(market_id)
+            y_e = entry_data['y_entry']
+            n_e = entry_data['n_entry']
+
             with balance_lock:
                 check_risk_management()
                 CURRENT_BALANCE += net_profit
                 TOTAL_TRADES_TODAY += 1
                 TOTAL_PROFIT_TODAY += net_profit
                 
+                # အသေးစိတ် Profit Message (Balance ကို နှိပ်၍ရအောင် ` ` သုံးထားသည်)
                 exit_msg = (
-                    f"💰 *PROFIT CAPTURED*\n"
+                    f"💰 *PROFIT CAPTURED (1.0+)*\n"
                     f"📌 {question}\n"
-                    f"📈 Exit Sum: `${current_exit_sum:.3f}`\n"
+                    f"----------------------------\n"
+                    f"📥 *Entry:* Y: `${y_e:.3f}` | N: `${n_e:.3f}`\n"
+                    f"📤 *Exit:* Y: `${y_bid:.3f}` | N: `${n_bid:.3f}`\n"
+                    f"📈 Total Sum: `${current_exit_sum:.3f}`\n"
+                    f"----------------------------\n"
                     f"💵 Net Profit: `+${net_profit:.4f}`\n"
-                    f"💳 New Bal: `${CURRENT_BALANCE:.2f}`"
+                    f"💳 Total Balance: `{CURRENT_BALANCE:.2f}`"
                 )
                 send_tele(exit_msg)
                 del ACTIVE_TRADES[market_id]
