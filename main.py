@@ -29,50 +29,57 @@ def send_tele(msg):
 
 def check_market_data(m):
     try:
-        # Sampling markets data structure အရ token id ကို ယူခြင်း
-        tokens = m.get('tokens', [])
+        # Token information extraction
+        tokens = m.get('tokens') or m.get('clobTokenIds')
         if not tokens: return False
         
-        t_id = tokens[0].get('token_id')
-        question = m.get('description', 'Polymarket Event')
+        # Format နှစ်မျိုးလုံးအတွက် စစ်ဆေးသည်
+        t_id = tokens[0].get('token_id') if isinstance(tokens[0], dict) else tokens[0]
+        question = m.get('description') or m.get('question') or "Polymarket Event"
 
-        # Live Midpoint Price ကို Proxy ဖြင့် ခေါ်ယူခြင်း
+        # Midpoint Price Check via Proxy
         price_url = f"https://clob.polymarket.com/midpoint?token_id={t_id}"
         p_res = scraper.get(price_url, proxies=proxies, timeout=10)
         
         if p_res.status_code == 200:
             mid_p = float(p_res.json().get('mid_price', 0))
             if mid_p > 0:
-                send_tele(f"💎 *MARKET FOUND*\n📌 {question}\n📈 Mid Price: `${mid_p:.3f}`")
+                send_tele(f"💎 *DATA RECEIVED*\n📌 {question}\n📈 Mid Price: `${mid_p:.3f}`")
                 return True
     except: return False
     return False
 
 def run_scanner():
-    print(f"RN1 V12 | UK IP: 31.59.20.176 | {datetime.datetime.now().strftime('%H:%M:%S')}")
+    print(f"RN1 V13 | UK IP: 31.59.20.176 | {datetime.datetime.now().strftime('%H:%M:%S')}")
     try:
-        # Sampling Markets ကို တိုက်ရိုက်ခေါ်ယူခြင်း
+        # Sampling Markets သို့မဟုတ် Events Endpoint ကို သုံးခြင်း
         res = scraper.get("https://clob.polymarket.com/sampling-markets", proxies=proxies, timeout=20)
         
         if res.status_code == 200:
-            markets = res.json()
-            # Error မတက်စေရန် list ဖြစ်မဖြစ် စစ်ဆေးသည်
-            if isinstance(markets, list):
+            data = res.json()
+            
+            # Slice error မတက်အောင် list သို့မဟုတ် dict ဖြစ်မဖြစ် စစ်ဆေးခြင်း
+            markets = []
+            if isinstance(data, list):
+                markets = data
+            elif isinstance(data, dict):
+                markets = data.get('markets') or list(data.values())
+            
+            if markets:
                 found_count = 0
-                # ထိပ်ဆုံး ပွဲ ၂၀ ကို အမြန်ဆုံး scan ဖတ်မည်
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    results = list(executor.map(check_market_data, markets[:20]))
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    results = list(executor.map(check_market_data, markets[:30]))
                     found_count = sum(1 for r in results if r)
                 
-                print(f"RN1 Scan | Markets Responding: {found_count}")
+                print(f"RN1 Scan | Active Responses: {found_count}")
         else:
-            print(f"⚠️ API Error: {res.status_code}")
+            print(f"⚠️ API Error: {res.status_code} (Bypassing...)")
             
     except Exception as e:
         print(f"❌ Scanner Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🛡️ *RN1 V12: Ultra-Stable Mode Online!*")
+    send_tele("🇬🇧 *RN1 V13: Ultimate Hybrid Mode Started!*")
     while True:
         run_scanner()
-        time.sleep(60)
+        time.sleep(45)
