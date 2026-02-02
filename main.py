@@ -13,12 +13,16 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Logic ($1000 Capital) ---
+# --- Strategy Settings ---
 CURRENT_BALANCE = 1000.0 
 TOTAL_PROFIT = 0.0
 TRADE_SIZE = 20.0       
 GAS_BUFFER = 0.01       
 EXIT_THRESHOLD = 1.02  
+
+# သင်အလိုရှိသည့်အတိုင်း Entry Range ကို ချဲ့ထားသည် (0.95 - 1.10)
+ENTRY_RANGE_MIN = 0.95
+ENTRY_RANGE_MAX = 1.10
 
 ACTIVE_TRADES = {} 
 balance_lock = threading.Lock()
@@ -50,18 +54,21 @@ def check_market_logic(m, client):
         a_id, b_id = tokens[0], tokens[1]
 
         if market_id not in ACTIVE_TRADES:
+            # Live Price ဆွဲယူခြင်း
             a_res = client.get(f"https://clob.polymarket.com/price?token_id={a_id}&side=BUY").json()
             b_res = client.get(f"https://clob.polymarket.com/price?token_id={b_id}&side=BUY").json()
             a_p, b_p = float(a_res.get('price', 0)), float(b_res.get('price', 0))
+            current_sum = a_p + b_p
             
-            # Entry Logic: A+B ≈ 1.00 (Parity Entry)
-            if 0.98 <= (a_p + b_p) <= 1.01:
+            # Entry Check (0.95 - 1.10)
+            if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX:
                 ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
                 entry_msg = (
-                    f"🏢 *GIANT SCAN ENTRY (1000)*\n📌 {question}\n"
+                    f"🚀 *AGGRESSIVE ENTRY (LIVE)*\n📌 {question}\n"
                     f"----------------------------\n"
                     f"🔹 A: `${a_p:.3f}` | 🔸 B: `${b_p:.3f}`\n"
-                    f"📊 Parity Sum: `${a_p+b_p:.3f}`"
+                    f"📊 Current Sum: `${current_sum:.3f}`\n"
+                    f"🎯 Range: `{ENTRY_RANGE_MIN} - {ENTRY_RANGE_MAX}`"
                 )
                 send_tele(entry_msg, True)
 
@@ -76,36 +83,29 @@ def check_market_logic(m, client):
                 with balance_lock:
                     CURRENT_BALANCE += net_profit
                     TOTAL_PROFIT += net_profit
-                    exit_msg = (
-                        f"💰 *PROFIT CAPTURED*\n📌 {question}\n"
-                        f"----------------------------\n"
-                        f"📤 Exit Sum: `${total_exit_sum:.3f}` (A:{a_bid} B:{b_bid})\n"
-                        f"📈 Net: `+${net_profit:.4f}`\n"
-                        f"💳 Balance: `${CURRENT_BALANCE:.2f}`"
-                    )
-                    send_tele(exit_msg, True)
+                    send_tele(f"💰 *PROFIT EXIT*\n📌 {question}\n📈 Net: `+${net_profit:.4f}`", True)
                     del ACTIVE_TRADES[market_id]
     except: pass
 
-def run_v31_engine():
-    print(f"RN1 V31 | GIANT SCAN (1000) | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v32_engine():
+    # V19 ၏ Stealth Log Format အတိုင်း ထားရှိသည်
+    print(f"RN1 V32 | MARKET MASTER | {datetime.datetime.now().strftime('%H:%M:%S')}")
     all_markets = []
     
     try:
         with httpx.Client(http2=True, headers=HEADERS, timeout=60.0) as client:
-            # ပွဲစဉ် ၁၀၀၀ ပြည့်အောင် Page ၁၀ ခု ဆွဲယူခြင်း (Offset 0 to 900)
+            # ပွဲစဉ် ၁၀၀၀ လုံး မိစေရန် Pagination သုံးခြင်း
             for offset in range(0, 1000, 100):
+                # active=true & closed=false ဖြင့် Live Data သေချာစေခြင်း
                 api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
                 res = client.get(api_url)
                 if res.status_code == 200:
                     all_markets.extend(res.json())
-                time.sleep(0.3) # API Rate limit ကို ရှောင်ရန်
+                time.sleep(0.3) 
             
-            # မူရင်း Log format ကို ထိန်းသိမ်းထားခြင်း
             print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
             
             if all_markets:
-                # ပွဲအရေအတွက် ၁၀၀၀ အတွက် Thread ပမာဏကို ၅၀ အထိ တိုးမြှင့်ထားသည်
                 with ThreadPoolExecutor(max_workers=50) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m, client)
@@ -114,8 +114,7 @@ def run_v31_engine():
         print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V31: The Market Giant (1000 Events) Online!*", True)
+    send_tele("🚀 *RN1 V32: Aggressive 1000-Market Engine Online!*", True)
     while True:
-        run_v31_engine()
-        # ပမာဏများသဖြင့် Cooldown Time ကို ညှိထားသည်
-        time.sleep(random.randint(90, 120))
+        run_v32_engine()
+        time.sleep(random.randint(60, 90))
