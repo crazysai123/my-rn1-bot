@@ -13,20 +13,20 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Core ---
+# --- Strategy Settings ---
 CURRENT_BALANCE = 1000.0 
 TOTAL_PROFIT = 0.0
 TRADE_SIZE = 20.0       
 EXIT_THRESHOLD = 1.02  
 
-# Entry Range (0.50 - 1.50)
-ENTRY_RANGE_MIN = 0.50
-ENTRY_RANGE_MAX = 1.50
+# Entry ဝင်ဖို့ အသေချာဆုံးဖြစ်အောင် Range ကို အစွမ်းကုန်ချဲ့ထားသည်
+ENTRY_RANGE_MIN = 0.20
+ENTRY_RANGE_MAX = 1.80
 
 ACTIVE_TRADES = {} 
 balance_lock = threading.Lock()
 
-# Error ကင်းဝေးစေရန် အကောင်းဆုံး Header
+# Decoder Error ကင်းဝေးစေရန် Header အပြည့်အစုံ
 HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "accept": "application/json",
@@ -44,7 +44,8 @@ def send_tele(msg):
 def check_market_logic(m):
     global ACTIVE_TRADES
     try:
-        question = m.get('question', 'Live Event')
+        # ဒေတာများကို အစိမ်းလိုက်ဆွဲထုတ်ခြင်း
+        question = m.get('question') or m.get('description', 'Live Event')
         market_id = m.get('conditionId') or m.get('id')
         raw_prices = m.get('outcomePrices') or []
         
@@ -52,51 +53,57 @@ def check_market_logic(m):
             a_p, b_p = float(raw_prices[0]), float(raw_prices[1])
             current_sum = a_p + b_p
 
-            # Railway Log တွင် ဈေးနှုန်းများကို ပြသခြင်း
+            # Railway Log မှာ ဈေးနှုန်းတိုင်းကို ပြသရန် (ဒီစာသားတက်လာရင် အလုပ်လုပ်နေပါပြီ)
             if current_sum > 0:
-                print(f"RN1 Check | {question[:20]}.. | Sum: {current_sum:.3f}")
+                print(f"TRACKER | {question[:25]}.. | Sum: {current_sum:.3f}")
 
-            # Entry Logic အပြည့်အစုံ
+            # Entry ဝင်မည့် Logic အပြည့်အစုံ
             if market_id not in ACTIVE_TRADES:
                 if ENTRY_RANGE_MIN <= current_sum <= ENTRY_RANGE_MAX:
                     with balance_lock:
-                        ACTIVE_TRADES[market_id] = {'a': a_p, 'b': b_p}
-                    send_tele(f"🔥 *ENTRY EXECUTED*\n📌 {question}\n📊 Sum: `{current_sum:.3f}`")
+                        ACTIVE_TRADES[market_id] = {'a': a_p, 'b': b_p, 'q': question}
+                    
+                    # Telegram သို့ ချက်ချင်းအကြောင်းကြားခြင်း
+                    msg = (f"🔥 *MEGA ENTRY EXECUTED*\n"
+                           f"📌 {question}\n"
+                           f"📊 Side A: `${a_p:.3f}`\n"
+                           f"📊 Side B: `${b_p:.3f}`\n"
+                           f"📈 Total Sum: `{current_sum:.3f}`")
+                    send_tele(msg)
     except: pass
 
-def run_v41_engine():
-    # မူရင်း Log Header
-    print(f"RN1 V41 | FINAL ENGINE | {datetime.datetime.now().strftime('%H:%M:%S')}")
+def run_v42_engine():
+    # မူရင်း Log Header Style
+    print(f"RN1 V42 | MEGA ENTRY | {datetime.datetime.now().strftime('%H:%M:%S')}")
     
     try:
-        # utf-8 decoding error ကို ကျော်လွှားရန် .json() ကို safety flag ဖြင့် သုံးခြင်း
         with httpx.Client(http2=True, headers=HEADERS, timeout=60.0) as client:
             all_markets = []
+            # ပွဲစဉ် ၁၀၀၀ လုံးကို အပိုင်းလိုက်ဆွဲယူခြင်း
             for offset in range(0, 1000, 100):
                 api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
                 res = client.get(api_url)
-                
                 if res.status_code == 200:
-                    # JSON ဖတ်ရာတွင် content ကို တိုက်ရိုက်ယူပြီး decode လုပ်သည်
                     try:
-                        data = res.json()
-                        all_markets.extend(data)
-                    except:
-                        continue
-                time.sleep(0.5)
+                        all_markets.extend(res.json())
+                    except: continue
+                time.sleep(0.3)
             
+            # မူရင်း Active Responses Log
             print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
             
             if all_markets:
-                with ThreadPoolExecutor(max_workers=30) as executor:
+                # Thread မြှင့်ပြီး အမြန်ဆုံး Entry ဝင်ခိုင်းခြင်း
+                with ThreadPoolExecutor(max_workers=50) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m)
                         
     except Exception as e:
-        print(f"⚠️ Network Note: {str(e)}")
+        print(f"⚠️ Status: {str(e)}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V41: Final Entry Engine Online!*")
+    send_tele("🚀 *RN1 V42: Mega-Entry Engine Active!*")
     while True:
-        run_v41_engine()
-        time.sleep(random.randint(45, 60))
+        run_v42_engine()
+        # အချိန်စောင့်ဆိုင်းမှုကို လျှော့ချပြီး အကြိမ်ရေများများ Scan ဖတ်ခိုင်းခြင်း
+        time.sleep(30)
