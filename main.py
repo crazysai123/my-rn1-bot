@@ -13,18 +13,16 @@ TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CURRENT_BALANCE = 1000.0
 TRADE_SIZE = 20.0
-MIN_EXIT_PROFIT = 0.02
 
-# --- Proxy Configuration (သင်ပေးထားသော အချက်အလက်များ) ---
-# Username: onzoyyph | Password: hed0nyhkyw59 | IP: 198.105.121.200
-PROXY_URL = "http://onzoyyph:hed0nyhkyw59@198.105.121.200:80"
+# --- WebShare Proxy with Port 6462 ---
+PROXY_URL = "http://onzoyyph:hed0nyhkyw59@198.105.121.200:6462"
 
 proxies = {
     "http": PROXY_URL,
     "https": PROXY_URL
 }
 
-# Cloudflare wall ကို Proxy သုံးပြီး ကျော်ဖြတ်ရန်
+# Cloudflare bypass လုပ်ရန် Scraper တည်ဆောက်ခြင်း
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
 )
@@ -36,13 +34,12 @@ def send_tele(msg):
     except: pass
 
 def check_market(market):
-    global CURRENT_BALANCE
     try:
         question = market.get('group_name', 'Live Event')
         tokens = market.get('clobTokenIds', [])
         if not tokens or len(tokens) < 2: return
 
-        # Proxy သုံးပြီး Polymarket ဈေးနှုန်းများကို တိုက်ရိုက်ယူခြင်း
+        # Proxy သုံးပြီး ဈေးနှုန်းဆွဲယူခြင်း
         y_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[0]}&side=BUY", proxies=proxies, timeout=10).json()
         n_res = scraper.get(f"https://clob.polymarket.com/price?token_id={tokens[1]}&side=BUY", proxies=proxies, timeout=10).json()
         
@@ -53,16 +50,16 @@ def check_market(market):
     except: pass
 
 def run_scanner():
-    # Proxy အလုပ်လုပ်ပုံကို စစ်ဆေးရန်
+    # IP အမှန်တကယ် ပြောင်းမပြောင်း စစ်ဆေးခြင်း
     try:
         ip_check = scraper.get("https://api.ipify.org", proxies=proxies, timeout=10).text
         print(f"RN1 Scan | Active IP: {ip_check} | Bal: ${CURRENT_BALANCE}")
-    except:
-        print("❌ Proxy Connection Failed! Please check your WebShare credentials.")
+    except Exception as e:
+        print(f"❌ Connection Failed: {e}")
         return
 
     try:
-        # Events Endpoint ကို Proxy ဖြင့် ခေါ်ယူခြင်း
+        # Polymarket Events ကို Proxy ဖြင့် ခေါ်ယူခြင်း
         gamma_url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=15"
         res = scraper.get(gamma_url, proxies=proxies, timeout=20)
         
@@ -73,12 +70,12 @@ def run_scanner():
                     for market in event.get('markets', []):
                         executor.submit(check_market, market)
         else:
-            print(f"⚠️ Status Code: {res.status_code} - Blocked even with Proxy.")
+            print(f"⚠️ Status Code: {res.status_code}")
     except Exception as e:
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    send_tele("🛡️ *RN1 V7: WebShare Proxy Mode Online!*")
+    send_tele("🚀 *RN1 V7: Proxy Connected with Port 6462!*")
     while True:
         run_scanner()
         time.sleep(30)
