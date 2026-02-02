@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Strategy Settings (အမြတ်အစစ်ရှာမည့် ပတ်ဝန်းကျင်)
-PROFIT_MARGIN = 0.003    # 0.3% Profit Target
+# Strategy Settings
+PROFIT_MARGIN = 0.001    # Lowered to 0.1% for frequent trading
 TOTAL_BALANCE = 100.0    
 TRADE_AMOUNT = 10.0      
 
@@ -16,7 +16,7 @@ RESET = '\033[0m'
 
 def real_strategy_scan():
     global TOTAL_BALANCE
-    print(f"{CYAN}Real Strategy Active. Scanning for 0.3% Profit... Balance: ${TOTAL_BALANCE:.2f}{RESET}")
+    print(f"{CYAN}Scanner Active (0.1% Margin). Balance: ${TOTAL_BALANCE:.2f}{RESET}")
     
     try:
         url = "https://clob.polymarket.com/markets?active=true"
@@ -31,25 +31,26 @@ def real_strategy_scan():
                 
                 if y_p > 0 and n_p > 0:
                     total_cost = y_p + n_p
-                    # အမြတ်တကယ်ရှိမှ ဝယ်မည့် Logic
+                    
+                    # 0.1% Profit Check (Cost < 0.999)
                     if total_cost <= (1.0 - PROFIT_MARGIN):
-                        print(f"\n{GREEN}[!!! REAL OPPORTUNITY FOUND !!!]")
+                        print(f"\n{GREEN}[!!! TRADE EXECUTED !!!]")
                         print(f"Market: {market.get('question')[:50]}")
                         
-                        # ဝယ်ယူခြင်း
+                        # Wallet Deduction
                         TOTAL_BALANCE -= TRADE_AMOUNT
-                        print(f"Action: Invested ${TRADE_AMOUNT:.2f} | Wallet: ${TOTAL_BALANCE:.2f}")
+                        print(f"Action: Invested ${TRADE_AMOUNT:.2f} | New Wallet: ${TOTAL_BALANCE:.2f}")
                         
-                        # အမြတ်တွက်ချက်ခြင်း
+                        # Profit Calculation
                         profit = (1.0 - total_cost) * (TRADE_AMOUNT / total_cost)
                         TOTAL_BALANCE += (TRADE_AMOUNT + profit)
-                        print(f"Settled: New Balance ${TOTAL_BALANCE:.2f}{RESET}")
+                        print(f"Settled: Total Balance Updated to ${TOTAL_BALANCE:.2f}{RESET}")
                         print("-" * 30)
             except: continue
-        print(f"Scan complete. Waiting for next cycle...")
+        print(f"Scan complete. Waiting...")
     except: print("API Connection Busy...")
 
 if __name__ == "__main__":
     while True:
         real_strategy_scan()
-        time.sleep(15)
+        time.sleep(10) # Scanning slightly faster
