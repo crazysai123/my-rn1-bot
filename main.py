@@ -21,9 +21,9 @@ TRADE_SIZE = 20.0
 GAS_BUFFER = 0.01       
 EXIT_THRESHOLD = 1.02  
 
-# Entry မိစေရန် Range ကို အနည်းငယ် ချဲ့ထားသည်
-ENTRY_RANGE_MIN = 0.95 
-ENTRY_RANGE_MAX = 1.01
+# သင်အလိုရှိသည့်အတိုင်း Entry Range ကို 0.8 - 1.3 သို့ ပြင်ဆင်ထားသည်
+ENTRY_RANGE_MIN = 0.8
+ENTRY_RANGE_MAX = 1.3
 
 ACTIVE_TRADES = {} 
 balance_lock = threading.Lock()
@@ -50,14 +50,18 @@ def check_market_logic(m):
         question = m.get('question') or m.get('description', 'Live Event')
         market_id = m.get('conditionId') or m.get('id')
         
-        # CLOB API အစား Gamma API က Live Price ကို တိုက်ရိုက်သုံးသည် (Entry ပိုမိစေရန်)
+        # Gamma API မှ Live Price ကို တိုက်ရိုက်ယူခြင်း (Unicode Error ကင်းဝေးစေရန်)
         raw_prices = m.get('outcomePrices') or []
         
         if len(raw_prices) >= 2:
             a_p, b_p = float(raw_prices[0]), float(raw_prices[1])
             parity_sum = a_p + b_p
 
-            # Entry Logic: Range အတွင်းရှိပါက ဝယ်မည်
+            # Log တွင် ဈေးနှုန်းများကို အမြဲစောင့်ကြည့်နေကြောင်း ပြသရန်
+            if parity_sum > 0:
+                print(f"RN1 Monitoring | Sum: {parity_sum:.3f} | {question[:15]}..")
+
+            # Entry Logic: 0.8 - 1.3 အတွင်းရှိလျှင် ဝယ်ယူမည်
             if market_id not in ACTIVE_TRADES:
                 if ENTRY_RANGE_MIN <= parity_sum <= ENTRY_RANGE_MAX:
                     with balance_lock:
@@ -65,14 +69,15 @@ def check_market_logic(m):
                     
                     entry_msg = (
                         f"🎯 *ENTRY EXECUTED*\n📌 {question}\n"
-                        f"🔹 A: `${a_p:.3f}` | 🔸 B: `${b_p:.3f}`\n"
-                        f"📊 Sum: `${parity_sum:.3f}`"
+                        f"📊 Side A: `${a_p:.3f}` | Side B: `${b_p:.3f}`\n"
+                        f"📈 Total Sum: `{parity_sum:.3f}`"
                     )
                     send_tele(entry_msg, True)
 
-            # Exit Logic: Profit ရလျှင် Balance ထဲပေါင်းမည်
+            # Exit Logic: Profit ရလျှင် Balance ထဲသို့ အလိုအလျောက် ပေါင်းထည့်မည်
             elif market_id in ACTIVE_TRADES:
                 if parity_sum >= EXIT_THRESHOLD:
+                    # အသားတင်အမြတ်တွက်ချက်ခြင်း
                     net_profit = (TRADE_SIZE * parity_sum) - (TRADE_SIZE * 2) - GAS_BUFFER
                     with balance_lock:
                         CURRENT_BALANCE += net_profit
@@ -80,41 +85,45 @@ def check_market_logic(m):
                         del ACTIVE_TRADES[market_id]
                     
                     exit_msg = (
-                        f"💰 *PROFIT CAPTURED*\n📈 Net: `+${net_profit:.4f}`\n"
-                        f"💳 New Balance: `${CURRENT_BALANCE:.2f}`"
+                        f"💰 *PROFIT ADDED TO BALANCE*\n📌 {question}\n"
+                        f"📈 Net Profit: `+${net_profit:.4f}`\n"
+                        f"💳 Total Balance: `${CURRENT_BALANCE:.2f}`"
                     )
                     send_tele(exit_msg, True)
     except: pass
 
-def run_v48_engine():
-    # ဝယ်ထားသော Entry အရေအတွက်ကို Log မှာ ပြသခြင်း
+def run_v49_engine():
+    # ဝယ်ထားသော Entry အရေအတွက်ကို Log တွင် ရှင်းလင်းစွာပြသခြင်း
     active_count = len(ACTIVE_TRADES)
-    print(f"RN1 V48 | {datetime.datetime.now().strftime('%H:%M:%S')} | Active Entries: {active_count}")
+    print(f"RN1 V49 | {datetime.datetime.now().strftime('%H:%M:%S')} | Total Active Entries: {active_count}")
     
     try:
         with httpx.Client(headers=HEADERS, timeout=45.0) as client:
             all_markets = []
+            # ပွဲစဉ် ၁၀၀၀ ပြည့်အောင် Loop ပတ်၍ ဆွဲယူခြင်း
             for offset in range(0, 1000, 100):
                 api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
                 res = client.get(api_url)
                 if res.status_code == 200:
-                    # Unicode error ကို ရှောင်ရန် Binary decode လုပ်သည်
+                    # utf-8 decoding logic ကို အသေချာဆုံးဖြစ်အောင် ပြင်ဆင်ထားသည်
                     data = json.loads(res.content.decode('utf-8', errors='ignore'))
                     all_markets.extend(data)
                 time.sleep(0.5)
             
-            print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
+            print(f"RN1 Scan | Total Markets Loaded: {len(all_markets)}") 
             
             if all_markets:
-                with ThreadPoolExecutor(max_workers=30) as executor:
+                # Thread ပမာဏကို ချိန်ညှိပြီး Entry ရှာခိုင်းခြင်း
+                with ThreadPoolExecutor(max_workers=25) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m)
                         
     except Exception as e:
-        print(f"⚠️ System Note: {str(e)[:40]}")
+        print(f"⚠️ Connection Note: {str(e)[:40]}")
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V48: Engine Online (Balance: $1000)*", True)
+    send_tele(f"🚀 *RN1 V49 Online*\n📊 Range: {ENTRY_RANGE_MIN}-{ENTRY_RANGE_MAX}\n💰 Balance: ${CURRENT_BALANCE}", True)
     while True:
-        run_v48_engine()
-        time.sleep(60)
+        run_v49_engine()
+        # API ဝန်မပိစေရန် ၄၅ စက္ကန့်လျှင် တစ်ကြိမ် Scan ဖတ်မည်
+        time.sleep(45)
