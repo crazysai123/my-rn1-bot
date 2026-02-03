@@ -23,65 +23,67 @@ async def send_tele_async(msg):
     if not TELE_TOKEN: return
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    async with httpx.AsyncClient() as client: 
-        await client.post(url, json=payload)
+    try:
+        async with httpx.AsyncClient() as client: 
+            await client.post(url, json=payload)
+    except: pass
 
-async def check_market_logic(m, client, sem):
-    async with sem:
-        try:
-            tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
-            if not tokens or len(tokens) < 2: return
-            
-            market_id = m.get('conditionId')
-            a_id, b_id = tokens[0], tokens[1]
+async def check_single_market(m, client):
+    try:
+        tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
+        if not tokens or len(tokens) < 2: return
+        
+        market_id = m.get('conditionId')
+        a_id, b_id = tokens[0], tokens[1]
 
-            # Price Fetching
-            a_res = (await client.get(f"https://clob.polymarket.com/book?token_id={a_id}")).json()
-            b_res = (await client.get(f"https://clob.polymarket.com/book?token_id={b_id}")).json()
-            
-            if not a_res.get('asks') or not b_res.get('asks'): return
-            
-            a_ask = float(a_res['asks'][0]['price'])
-            b_ask = float(b_res['asks'][0]['price'])
-            entry_sum = a_ask + b_ask
+        # RAM သက်သာစေရန် Timeout ကို လျှော့ထားသည်
+        a_res = (await client.get(f"https://clob.polymarket.com/book?token_id={a_id}", timeout=10.0)).json()
+        b_res = (await client.get(f"https://clob.polymarket.com/book?token_id={b_id}", timeout=10.0)).json()
+        
+        if not a_res.get('asks') or not b_res.get('asks'): return
+        
+        a_ask = float(a_res['asks'][0]['price'])
+        b_ask = float(b_res['asks'][0]['price'])
+        entry_sum = a_ask + b_ask
 
-            if market_id not in ACTIVE_TRADES:
-                # အလုပ်လုပ်မလုပ် သိနိုင်ရန် Range ကို 0.8 ကနေ 1.2 အထိ ထားသည်
-                if 0.80 <= entry_sum <= 1.20:
-                    ACTIVE_TRADES[market_id] = {'q': m.get('question'), 'sum': entry_sum}
-                    await send_tele_async(f"🎯 *V31.7 ENTRY*\n📌 {m.get('question')[:50]}...\n💰 Price: `{entry_sum:.3f}`")
-        except: pass
+        if market_id not in ACTIVE_TRADES:
+            # Bot အလုပ်လုပ်တာ မြင်ရစေရန် Range ကို 0.7 မှ 1.3 ထိ ချဲ့ထားသည်
+            if 0.70 <= entry_sum <= 1.30:
+                ACTIVE_TRADES[market_id] = {'q': m.get('question'), 'sum': entry_sum}
+                await send_tele_async(f"🎯 *V31.8 ENTRY*\n📌 {m.get('question')[:60]}\n💰 Sum: `{entry_sum:.3f}`")
+    except: pass
 
 async def run_v31_engine():
-    # Railway RAM သက်သာစေရန် Worker ကို ၁၀ ဦးသို့ လျှော့ချသည်
-    sem = asyncio.Semaphore(10) 
     print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
     
     async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=60.0) as client:
         all_markets = []
-        for offset in range(0, 1000, 100):
+        # Page ၃ ခုပဲ အရင်စစ်ကြည့်ပါ (၃၀၀ ပွဲ) - RAM Crash မဖြစ်စေရန်
+        for offset in range(0, 300, 100):
             try:
                 res = await client.get(f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}")
                 if res.status_code == 200:
                     all_markets.extend(res.json())
-                await asyncio.sleep(0.5) # API Error မတက်အောင် delay ပိုပေးသည်
             except: continue
         
         if all_markets:
-            print(f"Checking {len(all_markets)} markets. Processing now...")
-            tasks = [check_market_logic(m, client, sem) for m in all_markets]
-            await asyncio.gather(*tasks)
-            print(f"--- Scan Completed ---")
+            print(f"Checking {len(all_markets)} markets in small batches...")
+            # ပွဲစဉ်များကို ၁၀ ခုစီ ခွဲပြီး စစ်ဆေးသည် (RAM သက်သာရန်)
+            for i in range(0, len(all_markets), 10):
+                batch = all_markets[i:i+10]
+                tasks = [check_single_market(m, client) for m in batch]
+                await asyncio.gather(*tasks)
+                await asyncio.sleep(0.1) # API ကို အနားပေးသည်
 
 async def main():
-    await send_tele_async("🚀 *RN1 V31.7 Stable Engine Online!*")
+    await send_tele_async("🚀 *RN1 V31.8 Ultra-Light Online!*")
     while True:
         try:
             await run_v31_engine()
         except Exception as e:
-            print(f"Main Error: {e}")
-        # Railway RAM ခဏပြန်နားစေရန် Cooldown ကို ၂ မိနစ်အထိ တိုးမြှင့်သည်
-        await asyncio.sleep(120)
+            print(f"Error: {e}")
+        # Next scan cooldown
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
