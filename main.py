@@ -17,6 +17,7 @@ PAPER_BALANCE = 1000.0
 TOTAL_PROFIT = 0.0
 MAX_TRADE_CAP = 100.0  
 PLATFORM_FEE_PERCENT = 0.001 
+# Bot အလုပ်လုပ်တာ မြင်သာအောင် Threshold ကို ခဏလျှော့ထားခြင်း
 EXIT_THRESHOLD = 1.025 
 
 ACTIVE_TRADES = {}
@@ -48,7 +49,6 @@ async def check_market_logic(m, client):
             question = m.get('question', 'Unknown Event')
             a_id, b_id = tokens[0], tokens[1]
 
-            # Order Book မှ စျေးနှုန်းနှင့် အရေအတွက်ကို ဆွဲယူခြင်း
             a_res = (await client.get(f"https://clob.polymarket.com/book?token_id={a_id}")).json()
             b_res = (await client.get(f"https://clob.polymarket.com/book?token_id={b_id}")).json()
             
@@ -57,13 +57,13 @@ async def check_market_logic(m, client):
             b_best_ask = float(b_res['asks'][0]['price']) if b_res.get('asks') else 0
             b_available_size = float(b_res['asks'][0]['size']) if b_res.get('asks') else 0
 
-            # --- ENTRY LOGIC ---
+            # --- ENTRY LOGIC (Entry Range: 0.9 - 1.05 for Debugging) ---
             if market_id not in ACTIVE_TRADES:
-                # Slippage မရှိစေရန် အနည်းဆုံးအရေအတွက်ကို ယူခြင်း
                 usable_size = min(MAX_TRADE_CAP, a_available_size, b_available_size)
                 entry_sum = a_best_ask + b_best_ask
                 
-                if usable_size > 10 and 0.98 <= entry_sum <= 1.005:
+                # Bot အလုပ်လုပ်မလုပ် စစ်ဆေးရန် Range ကို ချဲ့ထားသည်
+                if usable_size > 5 and 0.90 <= entry_sum <= 1.05:
                     ACTIVE_TRADES[market_id] = {
                         'a_entry': a_best_ask, 'b_entry': b_best_ask, 
                         'size': usable_size, 'q': question
@@ -76,6 +76,7 @@ async def check_market_logic(m, client):
                         f"📊 အရေအတွက်: `{usable_size:.1f} shares`"
                     )
                     await send_tele_async(entry_msg)
+                    print(f"DEBUG: Entry Found - {question}")
 
             # --- EXIT LOGIC ---
             elif market_id in ACTIVE_TRADES:
@@ -86,7 +87,6 @@ async def check_market_logic(m, client):
                 trade = ACTIVE_TRADES[market_id]
 
                 if total_exit_sum >= EXIT_THRESHOLD:
-                    # အမြတ်နှင့် အခကြေးငွေ တွက်ချက်ခြင်း
                     entry_cost = trade['size'] * (trade['a_entry'] + trade['b_entry'])
                     exit_value = trade['size'] * total_exit_sum
                     total_fees = (entry_cost + exit_value) * PLATFORM_FEE_PERCENT
@@ -107,23 +107,38 @@ async def check_market_logic(m, client):
         except Exception: pass
 
 async def run_v31_engine():
-    print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
+    current_time = datetime.datetime.now().strftime('%H:%M:%S')
+    print(f"--- Scan Start: {current_time} ---")
+    
     async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=30.0) as client:
         all_markets = []
         for offset in range(0, 1000, 100):
             try:
                 res = await client.get(f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}")
                 if res.status_code == 200:
-                    all_markets.extend(res.json())
-                await asyncio.sleep(0.4) 
-            except: continue
+                    batch = res.json()
+                    all_markets.extend(batch)
+                    # API Response status ကို သိနိုင်ရန် print ထုတ်ခြင်း
+                    print(f"Fetched {len(all_markets)} markets... (Offset: {offset})")
+                await asyncio.sleep(0.5) 
+            except Exception as e:
+                print(f"API Error at offset {offset}: {e}")
+                continue
         
+        if not all_markets:
+            print("Warning: No markets fetched. Check API/Network.")
+            return
+
+        print(f"Processing {len(all_markets)} markets with {sem._value} workers...")
         tasks = [check_market_logic(m, client) for m in all_markets]
         await asyncio.gather(*tasks)
+        print(f"--- Scan Completed: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
 
 if __name__ == "__main__":
-    asyncio.run(send_tele_async("🚀 *RN1 V31.2 Paper Trading Bot Online!*"))
+    asyncio.run(send_tele_async("🚀 *RN1 V31.3 Debug Engine Online!*"))
     while True:
-        asyncio.run(run_v31_engine())
-        # ပွဲစဉ်များပြားသဖြင့် ၁ မိနစ်တစ်ခါ Scan ဖတ်ရန်
+        try:
+            asyncio.run(run_v31_engine())
+        except Exception as e:
+            print(f"Loop Error: {e}")
         time.sleep(60)
