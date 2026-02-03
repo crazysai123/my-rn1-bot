@@ -2,7 +2,10 @@ import os
 import time
 import httpx
 import datetime
-import asyncio
+import random
+import threading
+import json
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,109 +14,107 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Account Data (Starting $1000) ---
-CURRENT_BALANCE = 1000.0  #
-ACTIVE_TRADES = {}        # ဝယ်ထားသော ပွဲစဉ်များ သိမ်းဆည်းရန်
+# --- Strategy Logic ($1000 Capital) ---
+CURRENT_BALANCE = 1000.0 
+TOTAL_PROFIT = 0.0
+TRADE_SIZE = 20.0       
+GAS_BUFFER = 0.01       
+EXIT_THRESHOLD = 1.02  
+
+# Entry မိစေရန် Range ကို အနည်းငယ် ချဲ့ထားသည်
+ENTRY_RANGE_MIN = 0.95 
+ENTRY_RANGE_MAX = 1.01
+
+ACTIVE_TRADES = {} 
+balance_lock = threading.Lock()
+
 HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "accept": "application/json",
     "referer": "https://polymarket.com/"
 }
 
-async def send_tele_async(msg):
+def send_tele(msg, show_balance_btn=False):
     if not TELE_TOKEN: return
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    if show_balance_btn:
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Balance", "callback_data": "get_balance"}]]}
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(url, json=payload)
+        with httpx.Client() as client: client.post(url, json=payload)
     except: pass
 
-async def get_market_price(client, token_id, side="BUY"):
-    """ဈေးနှုန်းယူသည့် API (မူရင်း Code အတိုင်း)"""
+def check_market_logic(m):
+    global CURRENT_BALANCE, TOTAL_PROFIT, ACTIVE_TRADES
     try:
-        url = f"https://clob.polymarket.com/price?token_id={token_id}&side={side}"
-        res = await client.get(url, timeout=10.0)
-        return float(res.json().get('price', 0))
-    except: return 0
-
-async def check_market_logic(m, client):
-    global CURRENT_BALANCE, ACTIVE_TRADES
-    try:
-        tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
-        if not tokens or len(tokens) < 2: return
+        question = m.get('question') or m.get('description', 'Live Event')
+        market_id = m.get('conditionId') or m.get('id')
         
-        market_id = m.get('conditionId')
-        question = m.get('question')[:60]
+        # CLOB API အစား Gamma API က Live Price ကို တိုက်ရိုက်သုံးသည် (Entry ပိုမိစေရန်)
+        raw_prices = m.get('outcomePrices') or []
         
-        # --- ENTRY LOGIC (Entry ဝင်တာ သေချာစေရန် Range ချဲ့ခြင်း) ---
-        if market_id not in ACTIVE_TRADES:
-            a_p = await get_market_price(client, tokens[0], "BUY")
-            b_p = await get_market_price(client, tokens[1], "BUY")
-            entry_sum = a_p + b_p
+        if len(raw_prices) >= 2:
+            a_p, b_p = float(raw_prices[0]), float(raw_prices[1])
+            parity_sum = a_p + b_p
 
-            # ဈေးနှုန်းပေါင်းလဒ် 0.85 မှ 1.20 အတွင်းရှိလျှင် ဝယ်မည် (မူရင်းထက် ပိုကျယ်သည်)
-            if 0.85 <= entry_sum <= 1.20:
-                ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
-                
-                entry_msg = (
-                    f"🎯 *ENTRY CONFIRMED*\n"
-                    f"📌 {question}...\n"
-                    f"💰 အဝယ်ဈေး: `${entry_sum:.3f}`\n"
-                    f"📦 လက်ရှိဝယ်ထားသောပွဲစဉ်: `{len(ACTIVE_TRADES)}` ခု"
-                )
-                await send_tele_async(entry_msg)
+            # Entry Logic: Range အတွင်းရှိပါက ဝယ်မည်
+            if market_id not in ACTIVE_TRADES:
+                if ENTRY_RANGE_MIN <= parity_sum <= ENTRY_RANGE_MAX:
+                    with balance_lock:
+                        ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
+                    
+                    entry_msg = (
+                        f"🎯 *ENTRY EXECUTED*\n📌 {question}\n"
+                        f"🔹 A: `${a_p:.3f}` | 🔸 B: `${b_p:.3f}`\n"
+                        f"📊 Sum: `${parity_sum:.3f}`"
+                    )
+                    send_tele(entry_msg, True)
 
-        # --- EXIT & PROFIT LOGIC ---
-        elif market_id in ACTIVE_TRADES:
-            a_bid = await get_market_price(client, tokens[0], "SELL")
-            b_bid = await get_market_price(client, tokens[1], "SELL")
-            total_exit = a_bid + b_bid
-
-            # အမြတ် ၁% ကျော်လျှင် ရောင်းမည်
-            if total_exit >= 1.01: 
-                trade = ACTIVE_TRADES[market_id]
-                profit = (20.0 * total_exit) - (20.0 * (trade['a_entry'] + trade['b_entry']))
-                
-                CURRENT_BALANCE += profit # အမြတ်ကို Balance ထဲပေါင်းထည့်ခြင်း
-                
-                exit_msg = (
-                    f"💰 *PROFIT ADDED TO BALANCE*\n"
-                    f"📌 {trade['q']}\n"
-                    f"📈 အသားတင်အမြတ်: `+${profit:.4f}`\n"
-                    f"💳 Balance အသစ်: `${CURRENT_BALANCE:.2f}`"
-                )
-                await send_tele_async(exit_msg)
-                del ACTIVE_TRADES[market_id]
+            # Exit Logic: Profit ရလျှင် Balance ထဲပေါင်းမည်
+            elif market_id in ACTIVE_TRADES:
+                if parity_sum >= EXIT_THRESHOLD:
+                    net_profit = (TRADE_SIZE * parity_sum) - (TRADE_SIZE * 2) - GAS_BUFFER
+                    with balance_lock:
+                        CURRENT_BALANCE += net_profit
+                        TOTAL_PROFIT += net_profit
+                        del ACTIVE_TRADES[market_id]
+                    
+                    exit_msg = (
+                        f"💰 *PROFIT CAPTURED*\n📈 Net: `+${net_profit:.4f}`\n"
+                        f"💳 New Balance: `${CURRENT_BALANCE:.2f}`"
+                    )
+                    send_tele(exit_msg, True)
     except: pass
 
-async def run_v31_engine():
-    print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
-    async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=30.0) as client:
-        all_markets = []
-        # ပွဲစဉ် ၁၀၀၀ ကို Page လိုက် ဆွဲယူခြင်း
-        for offset in range(0, 1000, 100):
-            try:
-                url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
-                res = await client.get(url)
+def run_v48_engine():
+    # ဝယ်ထားသော Entry အရေအတွက်ကို Log မှာ ပြသခြင်း
+    active_count = len(ACTIVE_TRADES)
+    print(f"RN1 V48 | {datetime.datetime.now().strftime('%H:%M:%S')} | Active Entries: {active_count}")
+    
+    try:
+        with httpx.Client(headers=HEADERS, timeout=45.0) as client:
+            all_markets = []
+            for offset in range(0, 1000, 100):
+                api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
+                res = client.get(api_url)
                 if res.status_code == 200:
-                    all_markets.extend(res.json())
-                await asyncio.sleep(0.2)
-            except: continue
-        
-        print(f"Checking {len(all_markets)} markets Serial-style for stability...")
-        for m in all_markets:
-            await check_market_logic(m, client)
-            await asyncio.sleep(0.3) # API Rate limit protection
-
-async def main():
-    await send_tele_async(f"🚀 *RN1 V31.9.3 Online!*\n💰 Starting Balance: `${CURRENT_BALANCE}`")
-    while True:
-        try:
-            await run_v31_engine()
-        except Exception as e:
-            print(f"Error: {e}")
-        await asyncio.sleep(60)
+                    # Unicode error ကို ရှောင်ရန် Binary decode လုပ်သည်
+                    data = json.loads(res.content.decode('utf-8', errors='ignore'))
+                    all_markets.extend(data)
+                time.sleep(0.5)
+            
+            print(f"RN1 Scan | Active Responses: {len(all_markets)}") 
+            
+            if all_markets:
+                with ThreadPoolExecutor(max_workers=30) as executor:
+                    for m in all_markets:
+                        executor.submit(check_market_logic, m)
+                        
+    except Exception as e:
+        print(f"⚠️ System Note: {str(e)[:40]}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    send_tele("🚀 *RN1 V48: Engine Online (Balance: $1000)*", True)
+    while True:
+        run_v48_engine()
+        time.sleep(60)
