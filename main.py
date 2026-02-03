@@ -12,7 +12,7 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Logic ($1000 Capital) ---
+# --- Strategy Logic (Paper Trading) ---
 PAPER_BALANCE = 1000.0 
 TOTAL_PROFIT = 0.0
 MAX_TRADE_CAP = 100.0       
@@ -38,7 +38,8 @@ async def send_tele_async(msg):
 
 async def check_market_logic(m, client, sem):
     global PAPER_BALANCE, TOTAL_PROFIT
-    async with sem: # Semaphore ကို ဤနေရာတွင် သုံးခြင်းဖြင့် Loop Error ကင်းစေသည်
+    # Semaphore ကို function argument အနေနဲ့ လက်ခံပြီး သုံးမှသာ Loop Error ကင်းပါမည်
+    async with sem:
         try:
             tokens = m.get('clobTokenIds') or [t.get('token_id') for t in m.get('tokens', [])]
             if not tokens or len(tokens) < 2: return
@@ -47,7 +48,7 @@ async def check_market_logic(m, client, sem):
             question = m.get('question', 'Unknown Event')
             a_id, b_id = tokens[0], tokens[1]
 
-            # Price Fetching
+            # Detailed Order Book Fetching
             a_res = (await client.get(f"https://clob.polymarket.com/book?token_id={a_id}")).json()
             b_res = (await client.get(f"https://clob.polymarket.com/book?token_id={b_id}")).json()
             
@@ -80,6 +81,7 @@ async def check_market_logic(m, client, sem):
                 
                 trade = ACTIVE_TRADES[market_id]
                 if total_exit >= EXIT_THRESHOLD:
+                    # Profit & Fee Calculation
                     entry_cost = trade['size'] * (trade['a_entry'] + trade['b_entry'])
                     exit_value = trade['size'] * total_exit
                     total_fees = (entry_cost + exit_value) * PLATFORM_FEE_PERCENT
@@ -95,10 +97,11 @@ async def check_market_logic(m, client, sem):
                     )
                     await send_tele_async(exit_msg)
                     del ACTIVE_TRADES[market_id]
-        except: pass
+        except Exception:
+            pass
 
 async def run_v31_engine():
-    # Loop တိုင်းမှာ Semaphore ကို အသစ်ပြန်ဖွင့်ခြင်းဖြင့် Error ကို ရှင်းသည်
+    # Semaphore ကို ဤနေရာတွင်သာ အသစ်ဆောက်ပါ (Loop Error ကာကွယ်ရန်)
     sem = asyncio.Semaphore(15)
     print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
     
@@ -114,18 +117,21 @@ async def run_v31_engine():
             except: continue
         
         if all_markets:
+            print(f"Processing {len(all_markets)} events with dedicated semaphore...")
             tasks = [check_market_logic(m, client, sem) for m in all_markets]
             await asyncio.gather(*tasks)
-            print(f"--- Scan Completed: {len(all_markets)} events processed ---")
+            print(f"--- Scan Completed at {datetime.datetime.now().strftime('%H:%M:%S')} ---")
 
-async def main():
-    await send_tele_async("🚀 *RN1 V31.4 Fixed Engine Online!*")
+async def main_loop():
+    await send_tele_async("🚀 *RN1 V31.5 Final Stable Engine Online!*")
     while True:
         try:
             await run_v31_engine()
         except Exception as e:
-            print(f"Loop Error: {e}")
-        await asyncio.sleep(60) # ၁ မိနစ်တစ်ခါ Scan ဖတ်ရန်
+            print(f"Main Loop Error: {e}")
+        # Next scan cooldown
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # စိတ်ချရသော asyncio running method ကို သုံးခြင်း
+    asyncio.run(main_loop())
