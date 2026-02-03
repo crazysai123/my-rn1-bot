@@ -10,7 +10,7 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Paper Trading ---
+# --- Paper Trading Configuration ---
 PAPER_BALANCE = 1000.0 
 ACTIVE_TRADES = {} 
 
@@ -39,7 +39,6 @@ async def check_market_logic(m, client, sem):
             a_res = (await client.get(f"https://clob.polymarket.com/book?token_id={a_id}")).json()
             b_res = (await client.get(f"https://clob.polymarket.com/book?token_id={b_id}")).json()
             
-            # စျေးနှုန်းရှိမရှိ အရင်စစ်မည်
             if not a_res.get('asks') or not b_res.get('asks'): return
             
             a_ask = float(a_res['asks'][0]['price'])
@@ -47,16 +46,15 @@ async def check_market_logic(m, client, sem):
             entry_sum = a_ask + b_ask
 
             if market_id not in ACTIVE_TRADES:
-                # ENTRY RANGE ကို အမြင့်ဆုံးအထိ လျှော့ချလိုက်သည် (0.5 ကနေ 1.5 အထိ)
-                # ရည်ရွယ်ချက်မှာ Bot အလုပ်လုပ်သည်ကို Telegram တွင် မြင်ရရန်ဖြစ်သည်
-                if 0.50 <= entry_sum <= 1.50:
+                # အလုပ်လုပ်မလုပ် သိနိုင်ရန် Range ကို 0.8 ကနေ 1.2 အထိ ထားသည်
+                if 0.80 <= entry_sum <= 1.20:
                     ACTIVE_TRADES[market_id] = {'q': m.get('question'), 'sum': entry_sum}
-                    await send_tele_async(f"🎯 *FORCE ENTRY*\n📌 {m.get('question')}\n💰 Combined Price: `{entry_sum:.3f}`")
-
-        except Exception: pass
+                    await send_tele_async(f"🎯 *V31.7 ENTRY*\n📌 {m.get('question')[:50]}...\n💰 Price: `{entry_sum:.3f}`")
+        except: pass
 
 async def run_v31_engine():
-    sem = asyncio.Semaphore(20) # Worker ပမာဏ တိုးမြှင့်သည်
+    # Railway RAM သက်သာစေရန် Worker ကို ၁၀ ဦးသို့ လျှော့ချသည်
+    sem = asyncio.Semaphore(10) 
     print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
     
     async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=60.0) as client:
@@ -66,19 +64,24 @@ async def run_v31_engine():
                 res = await client.get(f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}")
                 if res.status_code == 200:
                     all_markets.extend(res.json())
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.5) # API Error မတက်အောင် delay ပိုပေးသည်
             except: continue
         
         if all_markets:
-            print(f"Checking {len(all_markets)} markets for any valid price...")
+            print(f"Checking {len(all_markets)} markets. Processing now...")
             tasks = [check_market_logic(m, client, sem) for m in all_markets]
             await asyncio.gather(*tasks)
+            print(f"--- Scan Completed ---")
 
 async def main():
-    await send_tele_async("🚀 *RN1 V31.6 Force Entry Engine Online!*")
+    await send_tele_async("🚀 *RN1 V31.7 Stable Engine Online!*")
     while True:
-        await run_v31_engine()
-        await asyncio.sleep(30)
+        try:
+            await run_v31_engine()
+        except Exception as e:
+            print(f"Main Error: {e}")
+        # Railway RAM ခဏပြန်နားစေရန် Cooldown ကို ၂ မိနစ်အထိ တိုးမြှင့်သည်
+        await asyncio.sleep(120)
 
 if __name__ == "__main__":
     asyncio.run(main())
