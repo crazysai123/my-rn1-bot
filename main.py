@@ -11,7 +11,11 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 HEADERS = {"user-agent": "Mozilla/5.0", "accept": "application/json"}
-ACTIVE_TRADES = {}
+
+# --- Virtual Account Data ---
+VIRTUAL_BALANCE = 1004.0  # သင့်လက်ရှိ balance မှစတင်သည်
+ACTIVE_TRADES = {}        # ဝယ်ထားသော ပွဲစဉ်များ သိမ်းရန်
+TOTAL_TRADES_COUNT = 0
 
 async def send_tele_async(msg):
     if not TELE_TOKEN: return
@@ -22,69 +26,86 @@ async def send_tele_async(msg):
     except: pass
 
 async def get_price(client, token_id):
-    """ဈေးနှုန်းကို သီးသန့်ဆွဲယူပြီး Timeout ဖြစ်လျှင် ချက်ချင်းကျော်ရန်"""
     try:
         res = await client.get(f"https://clob.polymarket.com/book?token_id={token_id}", timeout=5.0)
         data = res.json()
-        if data.get('asks'):
-            return float(data['asks'][0]['price'])
+        if data.get('asks') and data.get('bids'):
+            return {
+                'ask': float(data['asks'][0]['price']), 
+                'bid': float(data['bids'][0]['price'])
+            }
     except: pass
     return None
 
 async def run_v31_engine():
+    global VIRTUAL_BALANCE, TOTAL_TRADES_COUNT
     print(f"--- Scan Start: {datetime.datetime.now().strftime('%H:%M:%S')} ---")
     
-    async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=15.0) as client:
-        # ၁။ ပွဲစဉ် ၅၀ ပဲ အရင်ဆွဲပါ (RAM နဲ့ Network သက်သာစေရန်)
+    async with httpx.AsyncClient(http2=True, headers=HEADERS, timeout=20.0) as client:
         try:
-            res = await client.get("https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=50")
+            res = await client.get("https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=40")
             markets = res.json()
-        except: 
-            print("API Connection Failed. Retrying...")
-            return
+        except: return
 
-        # ၂။ တစ်ပွဲချင်းစီကို Serial အစီအစဉ်အတိုင်း စစ်ဆေးခြင်း
         for m in markets:
             tokens = m.get('clobTokenIds')
             if not tokens or len(tokens) < 2: continue
-            
-            # Yes ဈေးနှင့် No ဈေးကို တစ်ခုချင်းဆွဲယူသည်
-            a_price = await get_price(client, tokens[0])
-            if a_price is None: continue
-            
-            b_price = await get_price(client, tokens[1])
-            if b_price is None: continue
-            
-            entry_sum = a_price + b_price
             m_id = m.get('conditionId')
+            
+            # ဈေးနှုန်းယူခြင်း
+            token_a = await get_price(client, tokens[0])
+            token_b = await get_price(client, tokens[1])
+            
+            if not token_a or not token_b: continue
+            
+            entry_sum = token_a['ask'] + token_b['ask']
+            exit_sum = token_a['bid'] + token_b['bid']
 
-            # ၃။ Entry Logic (0.80 မှ 1.20 ကြားဆိုလျှင် အဝယ်စာရင်းသွင်းမည်)
+            # --- ၁။ ENTRY LOGIC (Entry ဝင်တာ သေချာစေရန် Range ချဲ့ထားသည်) ---
             if m_id not in ACTIVE_TRADES:
-                if 0.80 <= entry_sum <= 1.20:
-                    ACTIVE_TRADES[m_id] = True
-                    # Telegram သို့ အသေးစိတ်ပို့ခြင်း
+                # ဈေးနှုန်းပေါင်းလဒ် 0.85 နှင့် 1.15 ကြားရှိလျှင် ဝယ်မည်
+                if 0.85 <= entry_sum <= 1.15:
+                    ACTIVE_TRADES[m_id] = {
+                        'q': m.get('question'),
+                        'buy_price': entry_sum,
+                        'size': 100 # shares
+                    }
+                    TOTAL_TRADES_COUNT += 1
+                    
                     msg = (
-                        f"🎯 *MATCH FOUND*\n"
-                        f"📌 {m.get('question')[:80]}\n"
-                        f"💰 Combined Price: `{entry_sum:.3f}`\n"
-                        f"📊 Yes: `{a_price}` | No: `{b_price}`"
+                        f"🎯 *ENTRY CONFIRMED*\n"
+                        f"📌 {m.get('question')[:70]}\n"
+                        f"💰 အဝယ်ဈေး: `{entry_sum:.3f}`\n"
+                        f"📦 လက်ရှိဝယ်ထားသောပွဲစဉ်: `{len(ACTIVE_TRADES)}` ခု"
                     )
                     await send_tele_async(msg)
-                    print(f"Found Entry: {m.get('question')[:30]}")
+
+            # --- ၂။ EXIT & PROFIT LOGIC ---
+            elif m_id in ACTIVE_TRADES:
+                trade = ACTIVE_TRADES[m_id]
+                # အမြတ် ၁% ကျော်လျှင် ရောင်းမည် (Arbitrage logic)
+                if exit_sum > 1.01: 
+                    profit = (exit_sum - trade['buy_price']) * trade['size']
+                    VIRTUAL_BALANCE += profit # အမြတ်ကို Balance ထဲပေါင်းထည့်ခြင်း
+                    
+                    msg = (
+                        f"💰 *PROFIT COLLECTED*\n"
+                        f"📌 {trade['q'][:70]}\n"
+                        f"📈 အသားတင်အမြတ်: `+${profit:.2f}`\n"
+                        f"💳 စုစုပေါင်း Balance: `${VIRTUAL_BALANCE:.2f}`"
+                    )
+                    await send_tele_async(msg)
+                    del ACTIVE_TRADES[m_id]
             
-            # API Overload မဖြစ်အောင် အနားပေးသည်
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)
 
 async def main():
-    await send_tele_async("🚀 *RN1 V31.9.1 Serial Stable Online!*")
+    await send_tele_async(f"🚀 *RN1 V31.9.2 Active Tracker Online!*\n💰 Starting Balance: `${VIRTUAL_BALANCE}`")
     while True:
         try:
             await run_v31_engine()
-            print("--- Scan Cycle Completed ---")
-        except Exception as e:
-            print(f"Loop Error: {e}")
-        # Railway Container မပိတ်အောင် Cooldown ကို ၄၅ စက္ကန့်ထားသည်
-        await asyncio.sleep(45)
+        except: pass
+        await asyncio.sleep(40)
 
 if __name__ == "__main__":
     asyncio.run(main())
