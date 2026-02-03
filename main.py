@@ -2,7 +2,6 @@ import os
 import time
 import httpx
 import datetime
-import random
 import threading
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -14,116 +13,74 @@ load_dotenv()
 TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Strategy Logic ($1000 Capital) ---
+# --- Strategy Core ---
 CURRENT_BALANCE = 1000.0 
-TOTAL_PROFIT = 0.0
 TRADE_SIZE = 20.0       
-GAS_BUFFER = 0.01       
-EXIT_THRESHOLD = 1.02  
+EXIT_THRESHOLD = 1.05  
 
-# သင်အလိုရှိသည့်အတိုင်း Entry Range ကို 0.8 - 1.3 သို့ ပြင်ဆင်ထားသည်
-ENTRY_RANGE_MIN = 0.8
-ENTRY_RANGE_MAX = 1.3
+# Entry မိရန် ရာခိုင်နှုန်း အများဆုံးဖြစ်အောင် 0.1 - 1.9 အထိ ချဲ့ထားသည်
+ENTRY_RANGE_MIN = 0.1
+ENTRY_RANGE_MAX = 1.9
 
 ACTIVE_TRADES = {} 
 balance_lock = threading.Lock()
 
-HEADERS = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "accept": "application/json",
-    "referer": "https://polymarket.com/"
-}
-
-def send_tele(msg, show_balance_btn=False):
+def send_tele(msg):
     if not TELE_TOKEN: return
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
-    payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    if show_balance_btn:
-        payload["reply_markup"] = {"inline_keyboard": [[{"text": "💰 Check Balance", "callback_data": "get_balance"}]]}
     try:
-        with httpx.Client() as client: client.post(url, json=payload)
+        with httpx.Client() as client: client.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     except: pass
 
 def check_market_logic(m):
-    global CURRENT_BALANCE, TOTAL_PROFIT, ACTIVE_TRADES
+    global ACTIVE_TRADES
     try:
-        question = m.get('question') or m.get('description', 'Live Event')
-        market_id = m.get('conditionId') or m.get('id')
+        question = m.get('question') or m.get('description', 'Live Trade')
+        m_id = m.get('conditionId') or m.get('id')
+        prices = m.get('outcomePrices') or []
         
-        # Gamma API မှ Live Price ကို တိုက်ရိုက်ယူခြင်း (Unicode Error ကင်းဝေးစေရန်)
-        raw_prices = m.get('outcomePrices') or []
-        
-        if len(raw_prices) >= 2:
-            a_p, b_p = float(raw_prices[0]), float(raw_prices[1])
-            parity_sum = a_p + b_p
+        if len(prices) >= 2:
+            p1, p2 = float(prices[0]), float(prices[1])
+            total = p1 + p2
 
-            # Log တွင် ဈေးနှုန်းများကို အမြဲစောင့်ကြည့်နေကြောင်း ပြသရန်
-            if parity_sum > 0:
-                print(f"RN1 Monitoring | Sum: {parity_sum:.3f} | {question[:15]}..")
+            # ဈေးနှုန်းတိုင်းကို Log မှာ ထုတ်ပြခိုင်းခြင်း (အလုပ်လုပ်နေမှန်း သေချာစေရန်)
+            if 0.05 < total < 2.5:
+                print(f"DEBUG | {question[:15]} | SUM: {total:.3f}")
 
-            # Entry Logic: 0.8 - 1.3 အတွင်းရှိလျှင် ဝယ်ယူမည်
-            if market_id not in ACTIVE_TRADES:
-                if ENTRY_RANGE_MIN <= parity_sum <= ENTRY_RANGE_MAX:
+            if m_id not in ACTIVE_TRADES:
+                if ENTRY_RANGE_MIN <= total <= ENTRY_RANGE_MAX:
                     with balance_lock:
-                        ACTIVE_TRADES[market_id] = {'a_entry': a_p, 'b_entry': b_p, 'q': question}
-                    
-                    entry_msg = (
-                        f"🎯 *ENTRY EXECUTED*\n📌 {question}\n"
-                        f"📊 Side A: `${a_p:.3f}` | Side B: `${b_p:.3f}`\n"
-                        f"📈 Total Sum: `{parity_sum:.3f}`"
-                    )
-                    send_tele(entry_msg, True)
-
-            # Exit Logic: Profit ရလျှင် Balance ထဲသို့ အလိုအလျောက် ပေါင်းထည့်မည်
-            elif market_id in ACTIVE_TRADES:
-                if parity_sum >= EXIT_THRESHOLD:
-                    # အသားတင်အမြတ်တွက်ချက်ခြင်း
-                    net_profit = (TRADE_SIZE * parity_sum) - (TRADE_SIZE * 2) - GAS_BUFFER
-                    with balance_lock:
-                        CURRENT_BALANCE += net_profit
-                        TOTAL_PROFIT += net_profit
-                        del ACTIVE_TRADES[market_id]
-                    
-                    exit_msg = (
-                        f"💰 *PROFIT ADDED TO BALANCE*\n📌 {question}\n"
-                        f"📈 Net Profit: `+${net_profit:.4f}`\n"
-                        f"💳 Total Balance: `${CURRENT_BALANCE:.2f}`"
-                    )
-                    send_tele(exit_msg, True)
+                        ACTIVE_TRADES[m_id] = True
+                    send_tele(f"🔥 *ENTRY TRIGGERED*\n📌 {question}\n📊 Sum: `{total:.3f}`")
     except: pass
 
-def run_v49_engine():
-    # ဝယ်ထားသော Entry အရေအတွက်ကို Log တွင် ရှင်းလင်းစွာပြသခြင်း
-    active_count = len(ACTIVE_TRADES)
-    print(f"RN1 V49 | {datetime.datetime.now().strftime('%H:%M:%S')} | Total Active Entries: {active_count}")
+def run_v50_engine():
+    # သင့် Screenshot ထဲကအတိုင်း Active Entries ကို အမြဲပြမည်
+    print(f"RN1 V50 | {datetime.datetime.now().strftime('%H:%M:%S')} | Active Entries: {len(ACTIVE_TRADES)}")
     
     try:
-        with httpx.Client(headers=HEADERS, timeout=45.0) as client:
+        with httpx.Client(timeout=45.0) as client:
             all_markets = []
-            # ပွဲစဉ် ၁၀၀၀ ပြည့်အောင် Loop ပတ်၍ ဆွဲယူခြင်း
             for offset in range(0, 1000, 100):
                 api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
                 res = client.get(api_url)
                 if res.status_code == 200:
-                    # utf-8 decoding logic ကို အသေချာဆုံးဖြစ်အောင် ပြင်ဆင်ထားသည်
                     data = json.loads(res.content.decode('utf-8', errors='ignore'))
                     all_markets.extend(data)
-                time.sleep(0.5)
+                time.sleep(0.3)
             
-            print(f"RN1 Scan | Total Markets Loaded: {len(all_markets)}") 
+            print(f"RN1 Scan | Markets Loaded: {len(all_markets)}") 
             
             if all_markets:
-                # Thread ပမာဏကို ချိန်ညှိပြီး Entry ရှာခိုင်းခြင်း
-                with ThreadPoolExecutor(max_workers=25) as executor:
+                with ThreadPoolExecutor(max_workers=30) as executor:
                     for m in all_markets:
                         executor.submit(check_market_logic, m)
                         
     except Exception as e:
-        print(f"⚠️ Connection Note: {str(e)[:40]}")
+        print(f"⚠️ Stability Note: {str(e)[:40]}")
 
 if __name__ == "__main__":
-    send_tele(f"🚀 *RN1 V49 Online*\n📊 Range: {ENTRY_RANGE_MIN}-{ENTRY_RANGE_MAX}\n💰 Balance: ${CURRENT_BALANCE}", True)
+    send_tele("🚀 *RN1 V50 Active: Entry Hunting Started!*")
     while True:
-        run_v49_engine()
-        # API ဝန်မပိစေရန် ၄၅ စက္ကန့်လျှင် တစ်ကြိမ် Scan ဖတ်မည်
-        time.sleep(45)
+        run_v50_engine()
+        time.sleep(30) # Scan အကြိမ်ရေကို ပိုစိပ်ထားသည်
