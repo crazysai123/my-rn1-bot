@@ -36,20 +36,30 @@ client = connect_clob()
 
 async def run_bot():
     global V_BALANCE
-    # သင်အလိုရှိသော Range အသစ်ကို ဤနေရာတွင် သတ်မှတ်ထားသည်
     R_MIN, R_MAX = 0.8, 1.0 
     
-    print(f"🚀 RN1 V56 | STRICT MODE | RANGE: {R_MIN}-{R_MAX} | CAPITAL: ${V_BALANCE}")
+    print(f"🚀 RN1 V57 | FAST PROFIT MODE | RANGE: {R_MIN}-{R_MAX}")
     
     async with httpx.AsyncClient() as h_client:
         while True:
             try:
+                # Active ပွဲစဉ်များကို ရယူခြင်း
                 res = await h_client.get("https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100")
                 markets = res.json() if res.status_code == 200 else []
 
                 print(f"RN1 | {datetime.datetime.now().strftime('%H:%M:%S')} | Bal: ${V_BALANCE:.2f} | Pos: {len(V_ACTIVE_POSITIONS)}")
 
                 for m in markets:
+                    # ၁။ ရက်ရှည်ပွဲစဉ်များကို ဖယ်ထုတ်ခြင်း (၇ ရက်အတွင်း အဖြေထွက်မည့်ပွဲကိုသာ ယူမည်)
+                    end_date_str = m.get('endDate')
+                    if end_date_str:
+                        try:
+                            end_date = datetime.datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            if (end_date - now).days > 7: 
+                                continue # ၇ ရက်ထက်ကျော်သော Future ပွဲများကို ကျော်သွားမည်
+                        except: continue
+
                     m_id = m.get('conditionId')
                     prices = m.get('outcomePrices')
                     
@@ -59,24 +69,25 @@ async def run_bot():
                         p_sum = p_a + p_b
                     except: continue
 
-                    # --- ENTRY LOGIC (Strict 0.8 - 1.0 Range) ---
+                    # ၂။ ENTRY LOGIC (0.8 - 1.0 Range)
                     if m_id not in V_ACTIVE_POSITIONS and (R_MIN <= p_sum <= R_MAX):
                         cost = 10.0 
                         V_ACTIVE_POSITIONS[m_id] = {
+                            "name": m.get('question', 'Trade'),
                             "s_a": cost / 2 / p_a,
                             "s_b": cost / 2 / p_b,
                             "capital": cost
                         }
                         V_BALANCE -= cost
-                        print(f"🔥 [V-ENTRY] {m.get('question')[:20]} | Sum: {p_sum:.3f}")
+                        print(f"🔥 [FAST-ENTRY] {m.get('question')[:20]}.. | Sum: {p_sum:.3f}")
 
-                    # --- EXIT LOGIC (1.02 Target) ---
+                    # ၃။ EXIT LOGIC (1.02 Target)
                     elif m_id in V_ACTIVE_POSITIONS and (p_sum >= 1.02):
                         pos = V_ACTIVE_POSITIONS[m_id]
                         p_return = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
                         V_BALANCE += p_return
                         del V_ACTIVE_POSITIONS[m_id]
-                        print(f"💰 [V-PROFIT] New Bal: ${V_BALANCE:.2f}")
+                        print(f"💰 [PROFIT-EXIT] New Bal: ${V_BALANCE:.2f}")
 
             except Exception: pass
             await asyncio.sleep(45)
