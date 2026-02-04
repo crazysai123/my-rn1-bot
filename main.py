@@ -1,86 +1,104 @@
-import os
-import time
-import httpx
-import datetime
-import threading
 import json
-from concurrent.futures import ThreadPoolExecutor
+import time
+import asyncio
+import threading
+import os
+import datetime
 from dotenv import load_dotenv
+from websocket import create_connection
+# မူရင်း Library များကို ထိန်းသိမ်းထားသည်
+from py_clob_client.client import ClobClient
+from py_clob_client.constants import POLYGON
 
 load_dotenv()
 
-# --- Configurations ---
-TELE_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELE_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# --- VIRTUAL CONFIGURATION (မူရင်းကို မထိဘဲ Virtual အတွက် ထည့်ခြင်း) ---
+VIRTUAL_CAPITAL = 100.0  # Paper Money $100
+V_BALANCE = VIRTUAL_CAPITAL
+V_ACTIVE_POSITIONS = {} # { "Market Name": {"s_a": size, "s_b": size, "entry_sum": sum} }
+V_TOTAL_PROFIT = 0.0
 
-# --- Strategy Core ---
-CURRENT_BALANCE = 1000.0 
-TRADE_SIZE = 20.0       
-EXIT_THRESHOLD = 1.05  
+# API Configuration (မူရင်းအတိုင်း ထားရှိသည်)
+API_CREDENTIALS = {
+    "host": os.getenv("CLOB_HOST", "https://clob.polymarket.com"),
+    "key": os.getenv("CLOB_API_KEY"),
+    "secret": os.getenv("CLOB_API_SECRET"),
+    "passphrase": os.getenv("CLOB_API_PASSPHRASE"),
+    "private_key": os.getenv("PRIVATE_KEY"),
+}
 
-# Entry မိရန် ရာခိုင်နှုန်း အများဆုံးဖြစ်အောင် 0.1 - 1.9 အထိ ချဲ့ထားသည်
-ENTRY_RANGE_MIN = 0.1
-ENTRY_RANGE_MAX = 1.9
+# --- FUNCTIONS (မူရင်း Logic ကို Paper Trading အတွက် ပြောင်းလဲခြင်း) ---
 
-ACTIVE_TRADES = {} 
-balance_lock = threading.Lock()
-
-def send_tele(msg):
-    if not TELE_TOKEN: return
-    url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
+def get_paper_market_data():
+    """ Gamma API မှ Live Data ကို Paper Trading အတွက် ယူသည် """
     try:
-        with httpx.Client() as client: client.post(url, json={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    except: pass
+        url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100"
+        with httpx.Client() as client:
+            res = client.get(url)
+            return res.json() if res.status_code == 200 else []
+    except: return []
 
-def check_market_logic(m):
-    global ACTIVE_TRADES
-    try:
-        question = m.get('question') or m.get('description', 'Live Trade')
-        m_id = m.get('conditionId') or m.get('id')
-        prices = m.get('outcomePrices') or []
-        
-        if len(prices) >= 2:
-            p1, p2 = float(prices[0]), float(prices[1])
-            total = p1 + p2
-
-            # ဈေးနှုန်းတိုင်းကို Log မှာ ထုတ်ပြခိုင်းခြင်း (အလုပ်လုပ်နေမှန်း သေချာစေရန်)
-            if 0.05 < total < 2.5:
-                print(f"DEBUG | {question[:15]} | SUM: {total:.3f}")
-
-            if m_id not in ACTIVE_TRADES:
-                if ENTRY_RANGE_MIN <= total <= ENTRY_RANGE_MAX:
-                    with balance_lock:
-                        ACTIVE_TRADES[m_id] = True
-                    send_tele(f"🔥 *ENTRY TRIGGERED*\n📌 {question}\n📊 Sum: `{total:.3f}`")
-    except: pass
-
-def run_v50_engine():
-    # သင့် Screenshot ထဲကအတိုင်း Active Entries ကို အမြဲပြမည်
-    print(f"RN1 V50 | {datetime.datetime.now().strftime('%H:%M:%S')} | Active Entries: {len(ACTIVE_TRADES)}")
+async def run_paper_bot():
+    global V_BALANCE, V_TOTAL_PROFIT
+    print(f"🚀 RN1 V51 | PAPER TRADING MODE | STARTING BALANCE: ${V_BALANCE}")
     
-    try:
-        with httpx.Client(timeout=45.0) as client:
-            all_markets = []
-            for offset in range(0, 1000, 100):
-                api_url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&offset={offset}"
-                res = client.get(api_url)
-                if res.status_code == 200:
-                    data = json.loads(res.content.decode('utf-8', errors='ignore'))
-                    all_markets.extend(data)
-                time.sleep(0.3)
+    while True:
+        markets = get_paper_market_data()
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # Log တွင် အခြေအနေပြသရန်
+        print(f"RN1 V51 | {current_time} | Active Paper Positions: {len(V_ACTIVE_POSITIONS)}")
+
+        for m in markets:
+            m_name = m.get('question', 'Unknown')
+            m_id = m.get('conditionId')
+            prices = m.get('outcomePrices')
             
-            print(f"RN1 Scan | Markets Loaded: {len(all_markets)}") 
+            if not prices or len(prices) < 2: continue
             
-            if all_markets:
-                with ThreadPoolExecutor(max_workers=30) as executor:
-                    for m in all_markets:
-                        executor.submit(check_market_logic, m)
+            p_a, p_b = float(prices[0]), float(prices[1])
+            parity_sum = p_a + p_b
+
+            # ၁။ ENTRY STRATEGY (0.8 - 1.3 Range)
+            if m_id not in V_ACTIVE_POSITIONS:
+                if 0.8 <= parity_sum <= 1.3:
+                    investment = V_BALANCE * 0.10 # လက်ကျန် balance ၏ ၁၀%
+                    
+                    # $5 Minimum Rule စစ်ဆေးခြင်း
+                    if investment >= 10: # နှစ်ဖက်ခွဲလျှင် $5 စီ အနည်းဆုံးရရန်
+                        with threading.Lock():
+                            V_ACTIVE_POSITIONS[m_id] = {
+                                "name": m_name,
+                                "s_a": investment / 2 / p_a,
+                                "s_b": investment / 2 / p_b,
+                                "entry_price": parity_sum,
+                                "capital_used": investment
+                            }
+                            V_BALANCE -= investment
                         
-    except Exception as e:
-        print(f"⚠️ Stability Note: {str(e)[:40]}")
+                        print(f"🔥 [PAPER ENTRY] {m_name[:20]} | Sum: {parity_sum:.3f} | Cost: ${investment:.2f}")
+
+            # ၂။ EXIT STRATEGY (Target 1.02)
+            elif m_id in V_ACTIVE_POSITIONS:
+                pos = V_ACTIVE_POSITIONS[m_id]
+                # အကယ်၍ ဈေးတက်လာပါက ပြန်ရောင်းမည်
+                if parity_sum >= 1.02:
+                    # အမြတ်တွက်ချက်ခြင်း
+                    returns = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
+                    profit = returns - pos['capital_used']
+                    
+                    with threading.Lock():
+                        V_BALANCE += returns
+                        V_TOTAL_PROFIT += profit
+                        del V_ACTIVE_POSITIONS[m_id]
+                    
+                    print(f"💰 [PAPER PROFIT] {m_name[:20]} | Net: +${profit:.4f} | New Balance: ${V_BALANCE:.2f}")
+
+        await asyncio.sleep(30) # ၃၀ စက္ကန့်လျှင် တစ်ကြိမ် စစ်ဆေးမည်
 
 if __name__ == "__main__":
-    send_tele("🚀 *RN1 V50 Active: Entry Hunting Started!*")
-    while True:
-        run_v50_engine()
-        time.sleep(30) # Scan အကြိမ်ရေကို ပိုစိပ်ထားသည်
+    # Virtual Simulation ဖြစ်သောကြောင့် loop ထဲတွင် run မည်
+    try:
+        asyncio.run(run_paper_bot())
+    except KeyboardInterrupt:
+        print(f"\n📈 FINAL PAPER REPORT | Profit: ${V_TOTAL_PROFIT:.2f} | Balance: ${V_BALANCE:.2f}")
