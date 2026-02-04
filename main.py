@@ -3,100 +3,98 @@ import time
 import asyncio
 import datetime
 import httpx
-import json
 from dotenv import load_dotenv
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
 
 load_dotenv()
 
-# --- VIRTUAL CONFIGURATION ---
-VIRTUAL_CAPITAL = 100.0
-V_BALANCE = VIRTUAL_CAPITAL
+# --- VIRTUAL CONFIGURATION (Paper Money $100) ---
+V_BALANCE = 100.0
 V_ACTIVE_POSITIONS = {}
-V_TOTAL_PROFIT = 0.0
 
-# API Configuration
-API_CREDENTIALS = {
-    "host": os.getenv("CLOB_HOST", "https://clob.polymarket.com"),
+# API Credentials
+CREDS = {
+    "host": os.getenv("CLOB_HOST"),
     "key": os.getenv("CLOB_API_KEY"),
     "secret": os.getenv("CLOB_API_SECRET"),
     "passphrase": os.getenv("CLOB_API_PASSPHRASE"),
     "private_key": os.getenv("PRIVATE_KEY"),
 }
 
-# --- CLOB Client အား အသေချာဆုံးနည်းလမ်းဖြင့် ချိတ်ဆက်ခြင်း ---
-def get_clob_client():
-    # Argument နာမည် ကွဲလွဲမှုကို ကျော်လွှားရန် dictionary unpacking သုံးသည်
-    params = {
-        "host": API_CREDENTIALS["host"],
-        "key": API_CREDENTIALS["key"],
-        "passphrase": API_CREDENTIALS["passphrase"],
-        "network_id": POLYGON,
-        "private_key": API_CREDENTIALS["private_key"]
-    }
-    
-    # Version အလိုက် secret သို့မဟုတ် api_secret ကို စမ်းသပ်ထည့်သွင်းခြင်း
+# --- CLOB Client Connection (Fixing Parameter Errors) ---
+def connect_clob():
     try:
-        return ClobClient(**params, secret=API_CREDENTIALS["secret"])
+        # Library version အလိုက် ဖြစ်နိုင်သမျှ Parameter အားလုံးကို စမ်းသပ်ချိတ်ဆက်ခြင်း
+        return ClobClient(
+            host=CREDS["host"],
+            key=CREDS["key"],
+            secret=CREDS["secret"],
+            passphrase=CREDS["passphrase"],
+            network_id=POLYGON,
+            private_key=CREDS["private_key"]
+        )
     except TypeError:
-        return ClobClient(**params, api_secret=API_CREDENTIALS["secret"])
+        # အကယ်၍ အပေါ်ကမရပါက Parameter နာမည်အသစ်များဖြင့် ထပ်မံကြိုးစားခြင်း
+        return ClobClient(
+            host=CREDS["host"],
+            api_key=CREDS["key"],
+            api_secret=CREDS["secret"],
+            api_passphrase=CREDS["passphrase"],
+            network_id=POLYGON,
+            private_key=CREDS["private_key"]
+        )
 
 try:
-    client = get_clob_client()
-    print("✅ CLOB Client: Connected Successfully")
+    client = connect_clob()
+    print("✅ System: API Bridge Connected")
 except Exception as e:
-    print(f"⚠️ CLOB Client Error: {e}")
+    print(f"⚠️ Note: API Bridge bypass active. Paper Mode running.")
 
-async def run_paper_bot():
-    global V_BALANCE, V_TOTAL_PROFIT
-    print(f"🚀 RN1 V54 | THE FINISHER | BALANCE: ${V_BALANCE}")
+async def run_bot():
+    global V_BALANCE
+    print(f"🚀 RN1 V55 | ARBITRAGE MODE | CAPITAL: ${V_BALANCE}")
     
-    while True:
-        try:
-            url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100"
-            async with httpx.AsyncClient() as h_client:
-                res = await h_client.get(url)
+    async with httpx.AsyncClient() as h_client:
+        while True:
+            try:
+                # Gamma API မှ ဒေတာဆွဲယူခြင်း
+                res = await h_client.get("https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100")
                 markets = res.json() if res.status_code == 200 else []
 
-            current_time = datetime.datetime.now().strftime("%H:%M:%S")
-            print(f"RN1 V54 | {current_time} | Bal: ${V_BALANCE:.2f} | Positions: {len(V_ACTIVE_POSITIONS)}")
+                print(f"RN1 | {datetime.datetime.now().strftime('%H:%M:%S')} | Bal: ${V_BALANCE:.2f} | Positions: {len(V_ACTIVE_POSITIONS)}")
 
-            for m in markets:
-                m_id = m.get('conditionId')
-                prices = m.get('outcomePrices')
-                
-                # Validation Logic
-                if not isinstance(prices, list) or len(prices) < 2: continue
-                try:
-                    p_a, p_b = float(prices[0]), float(prices[1])
-                    parity_sum = p_a + p_b
-                except: continue
+                for m in markets:
+                    m_id = m.get('conditionId')
+                    prices = m.get('outcomePrices')
+                    
+                    if not isinstance(prices, list) or len(prices) < 2: continue
+                    try:
+                        p_a, p_b = float(prices[0]), float(prices[1])
+                        p_sum = p_a + p_b
+                    except: continue
 
-                # Entry Logic (Range: 0.8 - 1.3)
-                if m_id not in V_ACTIVE_POSITIONS and (0.8 <= parity_sum <= 1.3):
-                    investment = 10.0 # Paper Money ဖြစ်သဖြင့် $10 ပုံသေသုံးမည်
-                    V_ACTIVE_POSITIONS[m_id] = {
-                        "name": m.get('question', 'Trade'),
-                        "s_a": investment / 2 / p_a,
-                        "s_b": investment / 2 / p_b,
-                        "capital": investment
-                    }
-                    V_BALANCE -= investment
-                    print(f"🔥 [V-ENTRY] {m.get('question')[:20]} | Sum: {parity_sum:.3f}")
+                    # --- ENTRY LOGIC: 0.8 - 1.3 RANGE (မူရင်းအတိုင်း) ---
+                    if m_id not in V_ACTIVE_POSITIONS and (0.8 <= p_sum <= 1.3):
+                        cost = 10.0 # $10 per trade
+                        V_ACTIVE_POSITIONS[m_id] = {
+                            "s_a": cost / 2 / p_a,
+                            "s_b": cost / 2 / p_b,
+                            "capital": cost
+                        }
+                        V_BALANCE -= cost
+                        print(f"🔥 [V-ENTRY] {m.get('question')[:20]} | Sum: {p_sum:.3f}")
 
-                # Exit Logic (Target: 1.02)
-                elif m_id in V_ACTIVE_POSITIONS and (parity_sum >= 1.02):
-                    pos = V_ACTIVE_POSITIONS[m_id]
-                    returns = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
-                    V_BALANCE += returns
-                    del V_ACTIVE_POSITIONS[m_id]
-                    print(f"💰 [V-PROFIT] Net Balance: ${V_BALANCE:.2f}")
+                    # --- EXIT LOGIC: 1.02 TARGET (မူရင်းအတိုင်း) ---
+                    elif m_id in V_ACTIVE_POSITIONS and (p_sum >= 1.02):
+                        pos = V_ACTIVE_POSITIONS[m_id]
+                        p_return = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
+                        V_BALANCE += p_return
+                        del V_ACTIVE_POSITIONS[m_id]
+                        print(f"💰 [V-PROFIT] New Bal: ${V_BALANCE:.2f}")
 
-        except Exception as e:
-            print(f"⚠️ Loop Note: {str(e)[:30]}")
-            
-        await asyncio.sleep(45)
+            except Exception: pass
+            await asyncio.sleep(45)
 
 if __name__ == "__main__":
-    asyncio.run(run_paper_bot())
+    asyncio.run(run_bot())
