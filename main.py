@@ -1,12 +1,10 @@
-import json
+import os
 import time
 import asyncio
-import threading
-import os
 import datetime
-import httpx  # httpx ကို အသုံးပြုရန် ထည့်သွင်းထားသည်
+import httpx
+import json
 from dotenv import load_dotenv
-from websocket import create_connection
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
 
@@ -27,75 +25,82 @@ API_CREDENTIALS = {
     "private_key": os.getenv("PRIVATE_KEY"),
 }
 
-# Stability: Client ကို Try-Except ဖြင့် တည်ဆောက်သည်
+# Stability: Client Initialization Fix
 try:
     client = ClobClient(
         API_CREDENTIALS["host"],
         key=API_CREDENTIALS["key"],
-        secret=API_CREDENTIALS["secret"],
+        api_secret=API_CREDENTIALS["secret"], # 'secret' မှ 'api_secret' သို့ ပြောင်းလဲထားသည်
         passphrase=API_CREDENTIALS["passphrase"],
         network_id=POLYGON,
         private_key=API_CREDENTIALS["private_key"]
     )
 except Exception as e:
-    print(f"⚠️ CLOB Client Warning: {e}")
+    print(f"⚠️ CLOB Client Init Note: {e}")
 
 def get_paper_market_data():
     try:
         url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100"
         with httpx.Client() as h_client:
             res = h_client.get(url)
-            return res.json() if res.status_code == 200 else []
-    except: return []
+            if res.status_code == 200:
+                return res.json()
+    except: pass
+    return []
 
 async def run_paper_bot():
     global V_BALANCE, V_TOTAL_PROFIT
-    print(f"🚀 RN1 V52 | STABLE PAPER MODE | STARTING BALANCE: ${V_BALANCE}")
+    print(f"🚀 RN1 V53 | FINAL STABLE | STARTING: ${V_BALANCE}")
     
     while True:
         markets = get_paper_market_data()
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
-        
-        # Log Monitoring
-        print(f"RN1 V52 | {current_time} | Balance: ${V_BALANCE:.2f} | Positions: {len(V_ACTIVE_POSITIONS)}")
+        print(f"RN1 V53 | {current_time} | Bal: ${V_BALANCE:.2f} | Pos: {len(V_ACTIVE_POSITIONS)}")
 
         for m in markets:
-            m_name = m.get('question', 'Unknown')
-            m_id = m.get('conditionId')
-            prices = m.get('outcomePrices')
-            
-            if not prices or len(prices) < 2: continue
-            
-            p_a, p_b = float(prices[0]), float(prices[1])
-            parity_sum = p_a + p_b
+            try:
+                m_name = m.get('question', 'Unknown')
+                m_id = m.get('conditionId')
+                prices = m.get('outcomePrices')
+                
+                # Data Validation Fix: ဈေးနှုန်းသည် list ဟုတ်မဟုတ်နှင့် float ပြောင်းနိုင်ခြင်းရှိမရှိ စစ်သည်
+                if not isinstance(prices, list) or len(prices) < 2: continue
+                
+                # စာသားဖြစ်နေပါက ကျော်သွားရန် logic ထည့်ထားသည်
+                try:
+                    p_a = float(prices[0])
+                    p_b = float(prices[1])
+                except (ValueError, TypeError): continue
+                
+                parity_sum = p_a + p_b
 
-            # ENTRY STRATEGY (0.8 - 1.3)
-            if m_id not in V_ACTIVE_POSITIONS:
-                if 0.8 <= parity_sum <= 1.3:
-                    investment = V_BALANCE * 0.10
-                    if investment >= 10:
-                        V_ACTIVE_POSITIONS[m_id] = {
-                            "name": m_name,
-                            "s_a": investment / 2 / p_a,
-                            "s_b": investment / 2 / p_b,
-                            "entry_price": parity_sum,
-                            "capital_used": investment
-                        }
-                        V_BALANCE -= investment
-                        print(f"🔥 [ENTRY] {m_name[:20]}.. | Sum: {parity_sum:.3f} | Cost: ${investment}")
+                # ENTRY (Range: 0.8 - 1.3)
+                if m_id not in V_ACTIVE_POSITIONS:
+                    if 0.8 <= parity_sum <= 1.3:
+                        investment = V_BALANCE * 0.10
+                        if investment >= 10:
+                            V_ACTIVE_POSITIONS[m_id] = {
+                                "name": m_name,
+                                "s_a": investment / 2 / p_a,
+                                "s_b": investment / 2 / p_b,
+                                "capital_used": investment
+                            }
+                            V_BALANCE -= investment
+                            print(f"🔥 [ENTRY] {m_name[:20]}.. | Sum: {parity_sum:.3f}")
 
-            # EXIT STRATEGY (Target 1.02)
-            elif m_id in V_ACTIVE_POSITIONS:
-                pos = V_ACTIVE_POSITIONS[m_id]
-                if parity_sum >= 1.02:
-                    returns = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
-                    profit = returns - pos['capital_used']
-                    V_BALANCE += returns
-                    V_TOTAL_PROFIT += profit
-                    del V_ACTIVE_POSITIONS[m_id]
-                    print(f"💰 [PROFIT] {m_name[:20]}.. | Net: +${profit:.4f}")
+                # EXIT (Target: 1.02)
+                elif m_id in V_ACTIVE_POSITIONS:
+                    pos = V_ACTIVE_POSITIONS[m_id]
+                    if parity_sum >= 1.02:
+                        returns = (pos['s_a'] * p_a) + (pos['s_b'] * p_b)
+                        profit = returns - pos['capital_used']
+                        V_BALANCE += returns
+                        V_TOTAL_PROFIT += profit
+                        del V_ACTIVE_POSITIONS[m_id]
+                        print(f"💰 [PROFIT] {m_name[:20]}.. | Net: +${profit:.4f}")
+            except: continue
 
-        await asyncio.sleep(60) # API Limit မထိစေရန် ၁ မိနစ်တစ်ခါ စစ်ဆေးမည်
+        await asyncio.sleep(45)
 
 if __name__ == "__main__":
     asyncio.run(run_paper_bot())
